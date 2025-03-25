@@ -36,7 +36,7 @@ pip install -e . -v
 
 # Train
 
-我们先用yolo12m作为基准模型，后续根据比赛具体评测设备调整。在OGSOD_yolo上微调24轮来评估各个模块是否有效，等实验出有效的模块以后再换到SARdet_100K_yolo进行完整的训练。
+我们先用yolo12m作为基准模型，后续根据比赛具体评测设备调整。在OGSOD_yolo上微调100轮来评估各个模块是否有效，等实验出有效的模块以后再换到SARdet_100K_yolo进行完整的训练。
 
 ```
 python train.py
@@ -44,7 +44,7 @@ python train.py
 
 如果只评测不训练，就把代码当中的
 ```
-results = model.train(data="/root/yolo-sar/datasets/OGSOD_yolo/dataset.yaml", epochs=24)
+results = model.train(data="/root/yolo-sar/datasets/OGSOD_yolo/dataset.yaml", epochs=100)
 ```
 注释掉。
 

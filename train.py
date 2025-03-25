@@ -5,7 +5,7 @@ if __name__=="__main__":
     model = YOLO("yolo12m.pt")
 
     # 用自定义的SAR数据集微调
-    results = model.train(data="datasets/OGSOD_yolo/dataset.yaml", epochs=24)
+    results = model.train(data="datasets/OGSOD_yolo/dataset.yaml", epochs=100)
 
     # 评测模型的效果
     results = model.val()
