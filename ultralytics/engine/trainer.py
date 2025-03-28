@@ -937,9 +937,11 @@ def convert_to_adv(Trainer:BaseTrainer):
                     # backward
                     if self.training_clean:
                         self.scaler.scale(0.5*adv_loss).backward()
+                        self.loss = 0.5*clean_loss + 0.5*adv_loss
                         self.loss_items = 0.5*clean_loss_items + 0.5*adv_loss_items
                     else:
                         self.scaler.scale(adv_loss).backward()
+                        self.loss = adv_loss
                         self.loss_items = adv_loss_items
                     self.tloss = (
                         (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None else self.loss_items
