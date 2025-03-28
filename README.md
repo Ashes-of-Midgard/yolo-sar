@@ -33,6 +33,12 @@ pip install -e . -v
 训练过程中会自动下载yolo12m和yolo11n预训练权重，如果网络不畅，没法自动下载，请从此处下载: https://pan.baidu.com/s/1hDinFXOZOVSZvCmrwUigqg?pwd=apbn 提取码: apbn
 并且放置在和train.py同一级目录下
 
+要选择哪一个数据集进行训练，只需要找到对应数据集目录下面的```dataset.yaml```文件，复制该文件的路径替代掉```train.py```当中的
+```
+results = model.train(data="/root/yolo-sar/datasets/OGSOD_yolo/dataset.yaml", epochs=100)
+```
+还需要修改```dataset.yaml```当中的```path:```，将其修改为数据集所在的路径。
+
 
 # Train
 

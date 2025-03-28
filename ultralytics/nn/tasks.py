@@ -423,6 +423,17 @@ class DetectionModel(BaseModel):
         return E2EDetectLoss(self) if getattr(self, "end2end", False) else v8DetectionLoss(self)
 
 
+class DetectionModelAdvDn(DetectionModel):
+    """YOLO detection model with background denoiser and adversarial training"""
+    
+    def __init__(self, backbone_out_indices=[4, 6, 8], *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.backbone_out_indices = backbone_out_indices
+
+    def forward(self, x, *args, **kwargs):
+        return super().forward(x, *args, **kwargs)
+
+
 class OBBModel(DetectionModel):
     """YOLO Oriented Bounding Box (OBB) model."""
 

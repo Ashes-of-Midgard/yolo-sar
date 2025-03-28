@@ -1,4 +1,5 @@
 from ultralytics import YOLO
+from ultralytics.models.yolo.detect.train import DetectionAdvTrainer
 
 if __name__=="__main__":
     # 加载预训练的yolo12权重

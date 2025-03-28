@@ -8,7 +8,7 @@ import numpy as np
 import torch.nn as nn
 
 from ultralytics.data import build_dataloader, build_yolo_dataset
-from ultralytics.engine.trainer import BaseTrainer
+from ultralytics.engine.trainer import BaseTrainer, convert_to_adv
 from ultralytics.models import yolo
 from ultralytics.nn.tasks import DetectionModel
 from ultralytics.utils import LOGGER, RANK
@@ -215,3 +215,5 @@ class DetectionTrainer(BaseTrainer):
         train_dataset = self.build_dataset(self.trainset, mode="train", batch=16)
         max_num_obj = max(len(label["cls"]) for label in train_dataset.labels) * 4  # 4 for mosaic augmentation
         return super().auto_batch(max_num_obj)
+
+DetectionAdvTrainer = convert_to_adv(DetectionTrainer)
