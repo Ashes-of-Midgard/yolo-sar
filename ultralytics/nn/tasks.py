@@ -6,8 +6,10 @@ import re
 import types
 from copy import deepcopy
 from pathlib import Path
+import math
 
 import torch
+from torch import nn
 
 from ultralytics.nn.modules import (
     AIFI,
@@ -63,6 +65,7 @@ from ultralytics.nn.modules import (
     TorchVision,
     WorldDetect,
     v10Detect,
+    DN_Res_block,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -90,6 +93,65 @@ try:
     import thop
 except ImportError:
     thop = None  # conda support without 'ultralytics-thop' installed
+
+
+BASE_MODULES = frozenset(
+    {
+        Classify,
+        Conv,
+        ConvTranspose,
+        GhostConv,
+        Bottleneck,
+        GhostBottleneck,
+        SPP,
+        SPPF,
+        C2fPSA,
+        C2PSA,
+        DWConv,
+        Focus,
+        BottleneckCSP,
+        C1,
+        C2,
+        C2f,
+        C3k2,
+        RepNCSPELAN4,
+        ELAN1,
+        ADown,
+        AConv,
+        SPPELAN,
+        C2fAttn,
+        C3,
+        C3TR,
+        C3Ghost,
+        torch.nn.ConvTranspose2d,
+        DWConvTranspose2d,
+        C3x,
+        RepC3,
+        PSA,
+        SCDown,
+        C2fCIB,
+        A2C2f,
+    }
+)
+REPEAT_MODULES = frozenset(  # modules with 'repeat' arguments
+    {
+        BottleneckCSP,
+        C1,
+        C2,
+        C2f,
+        C3k2,
+        C2fAttn,
+        C3,
+        C3TR,
+        C3Ghost,
+        C3x,
+        RepC3,
+        C2fPSA,
+        C2fCIB,
+        C2PSA,
+        A2C2f,
+    }
+)
 
 
 class BaseModel(torch.nn.Module):
@@ -423,15 +485,151 @@ class DetectionModel(BaseModel):
         return E2EDetectLoss(self) if getattr(self, "end2end", False) else v8DetectionLoss(self)
 
 
-class DetectionModelAdvDn(DetectionModel):
+class DetectionModelSep(DetectionModel):
+    """YOLO detection model with seperated forward function for backbone and head"""
+    
+    def __init__(self, cfg="yolo11n.yaml", ch=3, nc=None, verbose=True):
+        super().__init__(cfg, ch, nc, verbose)
+        self.backbone_len, self.backbone_out_layers = parse_model_components(deepcopy(self.yaml))
+    
+    def extract_features(self, x, profile=False, dt=None, visualize=False, output_all=False):
+        y = []
+        if profile:
+            assert isinstance(dt, list), f"dt is expected to be a list, but got {type(dt)}"
+        for m in self.model[:self.backbone_len]:
+            if m.f != -1:  # if not from previous layer
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+            if profile:
+                self._profile_one_layer(m, x, dt)
+            x = m(x)  # run
+            y.append(x)  # save output
+            if visualize:
+                feature_visualization(x, m.type, m.i, save_dir=visualize)
+        if output_all:
+            return y
+        else:
+            return [y[i] for i in self.backbone_out_layers]
+    
+    def head_forward(self, feats, profile=False, dt=None, visualize=False, whole_input=False, output_all=False):
+        if whole_input:
+            y = feats
+        else:
+            y = [None for _ in range(self.backbone_len)]
+            for i, layer in enumerate(self.backbone_out_layers):
+                y[layer] = feats[i]
+        if profile:
+            assert isinstance(dt, list), f"dt is expected to be a list, but got {type(dt)}"
+        x = y[-1]
+        for m in self.model[self.backbone_len:]:
+            if m.f != -1:  # if not from previous layer
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+            if profile:
+                self._profile_one_layer(m, x, dt)
+            x = m(x)  # run
+            y.append(x)  # save output
+            if visualize:
+                feature_visualization(x, m.type, m.i, save_dir=visualize)
+        
+        if output_all:
+            return y[self.backbone_len:]
+        else:
+            return x
+    
+    def _predict_once(self, x, profile=False, visualize=False, embed=None):
+        """
+        Perform a forward pass through the network.
+
+        Args:
+            x (torch.Tensor): The input tensor to the model.
+            profile (bool): Print the computation time of each layer if True.
+            visualize (bool): Save the feature maps of the model if True.
+            embed (list, optional): A list of feature vectors/embeddings to return.
+
+        Returns:
+            (torch.Tensor): The last output of the model.
+        """
+        if not hasattr(self, "backbone_len"):
+            # during the initialization, there is one forward calling before assigning self.backbone_len, self.backbone_out_layers
+            # And it has to use this branch
+            return super()._predict_once(x, profile, visualize, embed)
+        dt = []  # outputs
+        feats = self.extract_features(x, profile, dt, visualize, True)
+        head_outputs = self.head_forward(feats, profile, dt, visualize, True, True)
+        y = feats + head_outputs
+        if embed:
+            embeddings = [torch.nn.functional.adaptive_avg_pool2d(y[i], (1, 1)).squeeze(-1).squeeze(-1) for i in embed]
+            return torch.unbind(torch.cat(embeddings, 1), dim=0)
+        else:
+            return y[-1]
+
+
+class DetectionModelAdvDn(DetectionModelSep):
     """YOLO detection model with background denoiser and adversarial training"""
     
-    def __init__(self, backbone_out_indices=[4, 6, 8], *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.backbone_out_indices = backbone_out_indices
+    def __init__(self, cfg="yolo11n.yaml", ch=3, nc=None, verbose=True):
+        super().__init__(cfg, ch, nc, verbose)
+        # init denoisers for each scale
+        detect_head = self.model[-1]
+        assert isinstance(detect_head, Detect), f"Model's last layer should be Detect, but got {type(detect_head)}"
+        kernel_sizes = [make_divisible(i+3, 2)+1 for i in range(len(self.backbone_out_layers))] # [3, 5, 5, ...]
+        feat_channels = [parse_channels(deepcopy(self.yaml))[i] for i in self.backbone_out_layers]
+        self.denoisers = nn.ModuleList([
+            DN_Res_block(in_c=feat_channels[i], reduction=4, kernel_size=kernel_sizes[i])
+            for i in range(len(kernel_sizes))
+        ])
 
-    def forward(self, x, *args, **kwargs):
-        return super().forward(x, *args, **kwargs)
+    def forward_adv(self, x, adv_factor, rank, world_size):
+        assert isinstance(x, dict), f"Adversarial mode only works for training, so the input must be a dict, but got {type(x)}"
+        # Clean forward
+        features = self.extract_features(x["img"])
+        preds = self.head_forward(features)
+        clean_loss, clean_loss_items = self.loss(x, preds)
+        if rank != -1:
+            clean_loss *= world_size
+        # Generate masks
+        input_shape = x["img"].shape[1:]
+        bboxes = x["bboxes"]
+        mask = torch.zeros([1, 1, input_shape[1], input_shape[2]], dtype=features[0].dtype, device=features[0].device)
+        for box in bboxes:
+            x_min = int(input_shape[1] * (box[0]-box[2]/2))
+            x_max = int(input_shape[1] * (box[0]+box[2]/2))
+            y_min = int(input_shape[2] * (box[1]-box[3]/2))
+            y_max = int(input_shape[2] * (box[1]+box[3]/2))
+            mask[0, x_min:x_max, y_min:y_max] = 1
+        # Denoise the features and generate adversarial features
+        features_adv = []
+        for i, feat in enumerate(features):
+            # Denoise background
+            foreground_mask = nn.functional.interpolate(mask, size=feat.shape[2:4], mode='nearest')
+            background_mask = 1 - foreground_mask
+            dn_feat_bg = self.denoisers[i](feat * background_mask)
+            dn_feat = dn_feat_bg * background_mask + feat * foreground_mask
+            # Generate adversarial perturbations
+            feat_grad = torch.autograd.grad(clean_loss, feat, retain_graph=True, allow_unused=True)[0]
+            noise = (adv_factor * torch.sign(feat_grad)).detach()
+            feat_adv = dn_feat + noise
+            features_adv.append(feat_adv)
+        # Adv forward
+        preds = self.head_forward(features_adv)
+        adv_loss, adv_loss_items = self.loss(x, preds)
+        if rank != -1:
+            adv_loss *= world_size
+        
+        return adv_loss, adv_loss_items, clean_loss, clean_loss_items
+        
+    def forward(self, x, adv=False, adv_factor=0.03, rank=-1, world_size=1, *args, **kwargs):
+        """
+        Args:
+            x (torch.Tensor | dict): Input tensor for inference, or dict with image tensor and labels for training.
+            clean_loss (torch.Tensor | None): The loss value calculated during clean forward, only used for adversarial training
+            adv (bool): Whether to generate adversarial training. If adv is True, clean_loss must be a Tensor to calculate the gradients.
+            training_clean (bool): Whether to train the model on clean samples. If True, the gradients of clean_loss with respect to models'
+                weights will be accumulated and used for optimization. If not, only the gradients of adv_loss will be used for models' optimization.
+        """
+        if not adv:
+            return super().forward(x, *args, **kwargs)
+        else:
+            return self.forward_adv(x, adv_factor, rank, world_size)
 
 
 class OBBModel(DetectionModel):
@@ -1106,63 +1304,6 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         LOGGER.info(f"\n{'':>3}{'from':>20}{'n':>3}{'params':>10}  {'module':<45}{'arguments':<30}")
     ch = [ch]
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
-    base_modules = frozenset(
-        {
-            Classify,
-            Conv,
-            ConvTranspose,
-            GhostConv,
-            Bottleneck,
-            GhostBottleneck,
-            SPP,
-            SPPF,
-            C2fPSA,
-            C2PSA,
-            DWConv,
-            Focus,
-            BottleneckCSP,
-            C1,
-            C2,
-            C2f,
-            C3k2,
-            RepNCSPELAN4,
-            ELAN1,
-            ADown,
-            AConv,
-            SPPELAN,
-            C2fAttn,
-            C3,
-            C3TR,
-            C3Ghost,
-            torch.nn.ConvTranspose2d,
-            DWConvTranspose2d,
-            C3x,
-            RepC3,
-            PSA,
-            SCDown,
-            C2fCIB,
-            A2C2f,
-        }
-    )
-    repeat_modules = frozenset(  # modules with 'repeat' arguments
-        {
-            BottleneckCSP,
-            C1,
-            C2,
-            C2f,
-            C3k2,
-            C2fAttn,
-            C3,
-            C3TR,
-            C3Ghost,
-            C3x,
-            RepC3,
-            C2fPSA,
-            C2fCIB,
-            C2PSA,
-            A2C2f,
-        }
-    )
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
         m = (
             getattr(torch.nn, m[3:])
@@ -1176,7 +1317,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 with contextlib.suppress(ValueError):
                     args[j] = locals()[a] if a in locals() else ast.literal_eval(a)
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
-        if m in base_modules:
+        if m in BASE_MODULES:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
@@ -1185,7 +1326,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 args[2] = int(max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2])
 
             args = [c1, c2, *args[1:]]
-            if m in repeat_modules:
+            if m in REPEAT_MODULES:
                 args.insert(2, n)  # number of repeats
                 n = 1
             if m is C3k2:  # for M/L/X sizes
@@ -1244,6 +1385,95 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         ch.append(c2)
     return torch.nn.Sequential(*layers), sorted(save)
 
+
+def parse_model_components(d):
+    backbone_len = len(d["backbone"])
+    backbone_out_layers = []
+    for i, (f, n, m, args) in enumerate(d["head"]):  # from, number, module, args
+        backbone_out_layers.extend(x for x in ([f] if isinstance(f, int) else f) if (x != -1 and x<backbone_len))  # append to savelist
+    return backbone_len, backbone_out_layers
+
+
+def parse_channels(d):
+    """
+    Parse a YOLO model.yaml dictionary into its channels list.
+    """
+    max_channels = float("inf")
+    nc, act, scales = (d.get(x) for x in ("nc", "activation", "scales"))
+    depth, width, kpt_shape = (d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape"))
+    if scales:
+        scale = d.get("scale")
+        if not scale:
+            scale = tuple(scales.keys())[0]
+            LOGGER.warning(f"WARNING ⚠️ no model scale passed. Assuming scale='{scale}'.")
+        depth, width, max_channels = scales[scale]
+    ch=[1]
+    for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
+        m = (
+            getattr(torch.nn, m[3:])
+            if "nn." in m
+            else getattr(__import__("torchvision").ops, m[16:])
+            if "torchvision.ops." in m
+            else globals()[m]
+        )
+        if m in BASE_MODULES:
+            c1, c2 = ch[f], args[0]
+            if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+            if m is C2fAttn:  # set 1) embed channels and 2) num heads
+                args[1] = make_divisible(min(args[1], max_channels // 2) * width, 8)
+                args[2] = int(max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2])
+
+            args = [c1, c2, *args[1:]]
+            if m in REPEAT_MODULES:
+                args.insert(2, n)  # number of repeats
+                n = 1
+            if m is C3k2:  # for M/L/X sizes
+                legacy = False
+                if scale in "mlx":
+                    args[3] = True
+            if m is A2C2f:
+                legacy = False
+                if scale in "lx":  # for L/X sizes
+                    args.extend((True, 1.2))
+        elif m is AIFI:
+            args = [ch[f], *args]
+        elif m in frozenset({HGStem, HGBlock}):
+            c1, cm, c2 = ch[f], args[0], args[1]
+            args = [c1, cm, c2, *args[2:]]
+            if m is HGBlock:
+                args.insert(4, n)  # number of repeats
+                n = 1
+        elif m is ResNetLayer:
+            c2 = args[1] if args[3] else args[1] * 4
+        elif m is torch.nn.BatchNorm2d:
+            args = [ch[f]]
+        elif m is Concat:
+            c2 = sum(ch[x] for x in f)
+        elif m in frozenset({Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}):
+            args.append([ch[x] for x in f])
+            if m is Segment:
+                args[2] = make_divisible(min(args[2], max_channels) * width, 8)
+            if m in {Detect, Segment, Pose, OBB}:
+                m.legacy = legacy
+        elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
+            args.insert(1, [ch[x] for x in f])
+        elif m is CBLinear:
+            c2 = args[0]
+            c1 = ch[f]
+            args = [c1, c2, *args[1:]]
+        elif m is CBFuse:
+            c2 = ch[f[-1]]
+        elif m in frozenset({TorchVision, Index}):
+            c2 = args[0]
+            c1 = ch[f]
+            args = [*args[1:]]
+        else:
+            c2 = ch[f]
+        if i == 0:
+            ch = []
+        ch.append(c2)
+    return ch
 
 def yaml_model_load(path):
     """

@@ -911,32 +911,33 @@ def convert_to_adv(Trainer:BaseTrainer):
                         batch = self.preprocess_batch(batch)
                         img = batch["img"].clone().requires_grad_()
                         clean_batch = {**batch, "img": img}
-                        
-                        clean_loss, clean_loss_items = self.model(clean_batch)
-                        if RANK != -1:
-                            clean_loss *= world_size
-
+                        # check if the model has a customized adversarial method
                         if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
                             model = self.model.module
                         else:
                             model = self.model
                         if hasattr(model, "forward_adv"):
-                            adv_loss, adv_loss_items = self.model(clean_batch, clean_loss, adv=True, training_clean=self.training_clean)
+                            # Customized adversarial method
+                            adv_loss, adv_loss_items, clean_loss, clean_loss_items = self.model(clean_batch,
+                                                                                                adv=True,
+                                                                                                adv_factor=self.adv_factor,
+                                                                                                rank=RANK,
+                                                                                                world_size=world_size)
                         else:
-                            if self.training_clean:
-                                self.scaler.scale(0.5*clean_loss).backward()
-                                img_grad = clean_batch["img"].grad.data
-                            else:
-                                img_grad = torch.autograd.grad(clean_loss, img)[0].detach()
+                            # Default adversarial method (FGSM)
+                            clean_loss, clean_loss_items = self.model(clean_batch)
+                            if RANK != -1:
+                                clean_loss *= world_size
+                            img_grad = torch.autograd.grad(clean_loss, img, retain_graph=True, allow_unused=True)[0].detach()
                             adv_img = (img + self.adv_factor * torch.sign(img_grad)).detach()
                             adv_batch = {**batch, "img": adv_img}
                             adv_loss, adv_loss_items = self.model(adv_batch)
-                        if RANK != -1:
-                            adv_loss *= world_size
+                            if RANK != -1:
+                                adv_loss *= world_size
 
                     # backward
                     if self.training_clean:
-                        self.scaler.scale(0.5*adv_loss).backward()
+                        self.scaler.scale(0.5*clean_loss+0.5*adv_loss).backward()
                         self.loss = 0.5*clean_loss + 0.5*adv_loss
                         self.loss_items = 0.5*clean_loss_items + 0.5*adv_loss_items
                     else:

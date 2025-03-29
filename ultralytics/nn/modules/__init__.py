@@ -74,6 +74,7 @@ from .conv import (
     LightConv,
     RepConv,
     SpatialAttention,
+    DN_Res_block,
 )
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (
@@ -162,4 +163,5 @@ __all__ = (
     "TorchVision",
     "Index",
     "A2C2f",
+    "DN_Res_block",
 )

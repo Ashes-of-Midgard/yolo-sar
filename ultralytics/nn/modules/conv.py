@@ -712,3 +712,16 @@ class Index(nn.Module):
             (torch.Tensor): Selected tensor.
         """
         return x[self.index]
+
+class DN_Res_block(nn.Module):
+    def __init__(self, in_c=48, reduction=4, kernel_size=3):
+        super(DN_Res_block, self).__init__()
+        padding = (kernel_size - 1) // 2
+        self.conv_block = nn.Sequential(nn.Conv2d(in_c, in_c // reduction, kernel_size, 1, padding, bias=True), nn.ReLU(),
+                                        nn.Conv2d(in_c // reduction, in_c, kernel_size, 1, padding, bias=True))
+
+    def forward(self, x):
+        add = x
+        x = self.conv_block(x)
+        x = x + add
+        return x

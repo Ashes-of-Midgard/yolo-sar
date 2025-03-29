@@ -784,7 +784,12 @@ class Model(torch.nn.Module):
 
         self.trainer = (trainer or self._smart_load("trainer"))(overrides=args, _callbacks=self.callbacks)
         if not args.get("resume"):  # manually set model only if not resuming
-            self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
+            from ultralytics.models.yolo.detect.train import DetectionTrainer
+            if isinstance(self.trainer, DetectionTrainer):
+                # We implemented some subclass of DetectionModel, so the trainer should know which subclass the model belongs to when trying to copy it
+                self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml, model_type=type(self.model))
+            else:
+                self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
             self.model = self.trainer.model
 
         self.trainer.hub_session = self.session  # attach optional HUB session
