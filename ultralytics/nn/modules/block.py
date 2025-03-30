@@ -9,6 +9,7 @@ from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .transformer import TransformerBlock
+from .ppa import PPA
 
 __all__ = (
     "DFL",
@@ -307,6 +308,33 @@ class C2f(nn.Module):
         y = [y[0], y[1]]
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+
+
+class C2fPPA(nn.Module):
+    """C2f module with parallelized patch-aware attention module."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        """Initialize CSP bottleneck layer with two convolutions with arguments ch_in, ch_out, number, shortcut, groups,
+        expansion.
+        """
+        super().__init__()
+        self.c = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
+        self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
+        self.att = PPA(c2, c2)
+
+    def forward(self, x):
+        """Forward pass through C2f layer."""
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.att(self.cv2(torch.cat(y, 1)))
+
+    def forward_split(self, x):
+        """Forward pass using split() instead of chunk()."""
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.att(self.cv2(torch.cat(y, 1)))
 
 
 class C3(nn.Module):
@@ -1074,6 +1102,17 @@ class C3k2(C2f):
             g (int): Groups for convolutions.
             shortcut (bool): Whether to use shortcut connections.
         """
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(
+            C3k(self.c, self.c, 2, shortcut, g) if c3k else Bottleneck(self.c, self.c, shortcut, g) for _ in range(n)
+        )
+
+
+class C3k2PPA(C2fPPA):
+    """C23k module with parallelized patch-aware attention."""
+
+    def __init__(self, c1, c2, n=1, c3k=False, e=0.5, g=1, shortcut=True):
+        """Initializes the C3k2 module, a faster CSP Bottleneck with 2 convolutions and optional C3k blocks."""
         super().__init__(c1, c2, n, shortcut, g, e)
         self.m = nn.ModuleList(
             C3k(self.c, self.c, 2, shortcut, g) if c3k else Bottleneck(self.c, self.c, shortcut, g) for _ in range(n)
@@ -1856,6 +1895,57 @@ class A2C2f(nn.Module):
         y = [self.cv1(x)]
         y.extend(m(y[-1]) for m in self.m)
         y = self.cv2(torch.cat(y, 1))
+        if self.gamma is not None:
+            return x + self.gamma.view(-1, len(self.gamma), 1, 1) * y
+        return y
+
+class A2C2fPPA(nn.Module):
+    def __init__(self, c1, c2, n=1, a2=True, area=1, residual=False, mlp_ratio=2.0, e=0.5, g=1, shortcut=True):
+        """
+        Initialize Area-Attention C2f module.
+
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            n (int): Number of ABlock or C3k modules to stack.
+            a2 (bool): Whether to use area attention blocks. If False, uses C3k blocks instead.
+            area (int): Number of areas the feature map is divided.
+            residual (bool): Whether to use residual connections with learnable gamma parameter.
+            mlp_ratio (float): Expansion ratio for MLP hidden dimension.
+            e (float): Channel expansion ratio for hidden channels.
+            g (int): Number of groups for grouped convolutions.
+            shortcut (bool): Whether to use shortcut connections in C3k blocks.
+        """
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        assert c_ % 32 == 0, "Dimension of ABlock be a multiple of 32."
+
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv((1 + n) * c_, c2, 1)
+
+        self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
+        self.m = nn.ModuleList(
+            nn.Sequential(*(ABlock(c_, c_ // 32, mlp_ratio, area) for _ in range(2)))
+            if a2
+            else C3k(c_, c_, 2, shortcut, g)
+            for _ in range(n)
+        )
+        self.ppa = PPA(c2, c2)
+
+    def forward(self, x):
+        """
+        Forward pass through A2C2f layer.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Output tensor after processing.
+        """
+        y = [self.cv1(x)]
+        y.extend(m(y[-1]) for m in self.m)
+        y = self.cv2(torch.cat(y, 1))
+        y = self.ppa(y)
         if self.gamma is not None:
             return x + self.gamma.view(-1, len(self.gamma), 1, 1) * y
         return y

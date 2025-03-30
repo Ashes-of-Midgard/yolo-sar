@@ -3,7 +3,7 @@ from ultralytics import YOLO, YOLOAdv, YOLOAdvDn
 
 if __name__=="__main__":
     # 加载预训练的yolo12权重
-    model = YOLOAdvDn("yolo12m.yaml", task="detect")
+    model = YOLO("yolo12m-ppa.yaml", task="detect")
     check_point_model = YOLO("yolo12m.pt")
     model.load_state_dict(check_point_model.state_dict(), strict=False)
 

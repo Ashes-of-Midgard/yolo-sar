@@ -920,15 +920,16 @@ def convert_to_adv(Trainer:BaseTrainer):
                             # Customized adversarial method
                             adv_loss, adv_loss_items, clean_loss, clean_loss_items = self.model(clean_batch,
                                                                                                 adv=True,
-                                                                                                adv_factor=self.adv_factor,
-                                                                                                rank=RANK,
-                                                                                                world_size=world_size)
+                                                                                                adv_factor=self.adv_factor)
+                            if RANK != -1:
+                                clean_loss *= world_size
+                                adv_loss *= world_size
                         else:
                             # Default adversarial method (FGSM)
                             clean_loss, clean_loss_items = self.model(clean_batch)
                             if RANK != -1:
                                 clean_loss *= world_size
-                            img_grad = torch.autograd.grad(clean_loss, img, retain_graph=True, allow_unused=True)[0].detach()
+                            img_grad = torch.autograd.grad(clean_loss, img, retain_graph=self.training_clean, allow_unused=True)[0].detach()
                             adv_img = (img + self.adv_factor * torch.sign(img_grad)).detach()
                             adv_batch = {**batch, "img": adv_img}
                             adv_loss, adv_loss_items = self.model(adv_batch)

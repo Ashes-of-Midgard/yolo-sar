@@ -6,7 +6,6 @@ import re
 import types
 from copy import deepcopy
 from pathlib import Path
-import math
 
 import torch
 from torch import nn
@@ -25,6 +24,7 @@ from ultralytics.nn.modules import (
     SPPELAN,
     SPPF,
     A2C2f,
+    A2C2fPPA,
     AConv,
     ADown,
     Bottleneck,
@@ -33,8 +33,10 @@ from ultralytics.nn.modules import (
     C2fAttn,
     C2fCIB,
     C2fPSA,
+    C2fPPA,
     C3Ghost,
     C3k2,
+    C3k2PPA,
     C3x,
     CBFuse,
     CBLinear,
@@ -113,7 +115,9 @@ BASE_MODULES = frozenset(
         C1,
         C2,
         C2f,
+        C2fPPA,
         C3k2,
+        C3k2PPA,
         RepNCSPELAN4,
         ELAN1,
         ADown,
@@ -131,6 +135,7 @@ BASE_MODULES = frozenset(
         SCDown,
         C2fCIB,
         A2C2f,
+        A2C2fPPA,
     }
 )
 REPEAT_MODULES = frozenset(  # modules with 'repeat' arguments
@@ -140,6 +145,7 @@ REPEAT_MODULES = frozenset(  # modules with 'repeat' arguments
         C2,
         C2f,
         C3k2,
+        C3k2PPA,
         C2fAttn,
         C3,
         C3TR,
@@ -150,6 +156,7 @@ REPEAT_MODULES = frozenset(  # modules with 'repeat' arguments
         C2fCIB,
         C2PSA,
         A2C2f,
+        A2C2fPPA,
     }
 )
 
@@ -569,8 +576,6 @@ class DetectionModelAdvDn(DetectionModelSep):
     def __init__(self, cfg="yolo11n.yaml", ch=3, nc=None, verbose=True):
         super().__init__(cfg, ch, nc, verbose)
         # init denoisers for each scale
-        detect_head = self.model[-1]
-        assert isinstance(detect_head, Detect), f"Model's last layer should be Detect, but got {type(detect_head)}"
         kernel_sizes = [make_divisible(i+3, 2)+1 for i in range(len(self.backbone_out_layers))] # [3, 5, 5, ...]
         feat_channels = [parse_channels(deepcopy(self.yaml))[i] for i in self.backbone_out_layers]
         self.denoisers = nn.ModuleList([
@@ -578,14 +583,12 @@ class DetectionModelAdvDn(DetectionModelSep):
             for i in range(len(kernel_sizes))
         ])
 
-    def forward_adv(self, x, adv_factor, rank, world_size):
+    def forward_adv(self, x, adv_factor):
         assert isinstance(x, dict), f"Adversarial mode only works for training, so the input must be a dict, but got {type(x)}"
         # Clean forward
         features = self.extract_features(x["img"])
         preds = self.head_forward(features)
         clean_loss, clean_loss_items = self.loss(x, preds)
-        if rank != -1:
-            clean_loss *= world_size
         # Generate masks
         input_shape = x["img"].shape[1:]
         bboxes = x["bboxes"]
@@ -612,12 +615,10 @@ class DetectionModelAdvDn(DetectionModelSep):
         # Adv forward
         preds = self.head_forward(features_adv)
         adv_loss, adv_loss_items = self.loss(x, preds)
-        if rank != -1:
-            adv_loss *= world_size
         
         return adv_loss, adv_loss_items, clean_loss, clean_loss_items
         
-    def forward(self, x, adv=False, adv_factor=0.03, rank=-1, world_size=1, *args, **kwargs):
+    def forward(self, x, adv=False, adv_factor=0.03, *args, **kwargs):
         """
         Args:
             x (torch.Tensor | dict): Input tensor for inference, or dict with image tensor and labels for training.
@@ -629,7 +630,7 @@ class DetectionModelAdvDn(DetectionModelSep):
         if not adv:
             return super().forward(x, *args, **kwargs)
         else:
-            return self.forward_adv(x, adv_factor, rank, world_size)
+            return self.forward_adv(x, adv_factor)
 
 
 class OBBModel(DetectionModel):
@@ -1329,11 +1330,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             if m in REPEAT_MODULES:
                 args.insert(2, n)  # number of repeats
                 n = 1
-            if m is C3k2:  # for M/L/X sizes
+            if m in (C3k2, C3k2PPA):  # for M/L/X sizes
                 legacy = False
                 if scale in "mlx":
                     args[3] = True
-            if m is A2C2f:
+            if m in (A2C2f, A2C2fPPA):
                 legacy = False
                 if scale in "lx":  # for L/X sizes
                     args.extend((True, 1.2))
@@ -1428,11 +1429,11 @@ def parse_channels(d):
             if m in REPEAT_MODULES:
                 args.insert(2, n)  # number of repeats
                 n = 1
-            if m is C3k2:  # for M/L/X sizes
+            if m in (C3k2, C3k2PPA):  # for M/L/X sizes
                 legacy = False
                 if scale in "mlx":
                     args[3] = True
-            if m is A2C2f:
+            if m in (A2C2f, A2C2fPPA):
                 legacy = False
                 if scale in "lx":  # for L/X sizes
                     args.extend((True, 1.2))
