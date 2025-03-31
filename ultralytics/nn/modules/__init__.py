@@ -92,6 +92,7 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
+from .lsk import LSKblock
 
 __all__ = (
     "Conv",
@@ -169,5 +170,6 @@ __all__ = (
     "A2C2fPPA",
     "DN_Res_block",
     "C2fPPA",
-    "C3k2PPA"
+    "C3k2PPA",
+    "LSKblock",
 )
