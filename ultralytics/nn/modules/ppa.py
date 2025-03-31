@@ -3,6 +3,28 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .conv import Conv
+
+
+class ECA(nn.Module):
+    def __init__(self, in_channel, gamma=2, b=1):
+        super(ECA, self).__init__()
+        k = int(abs((math.log(in_channel, 2) + b) / gamma))
+        kernel_size = k if k % 2 else k + 1
+        padding = kernel_size // 2
+        self.pool = nn.AdaptiveAvgPool2d(output_size=1)
+        self.conv = nn.Sequential(
+            nn.Conv1d(in_channels=1, out_channels=1, kernel_size=kernel_size, padding=padding, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        out = self.pool(x) # (B, C, 1, 1)
+        out = out.view(x.size(0), 1, x.size(1)) # (B, 1, C)
+        out = self.conv(out) # (B, 1, C)
+        out = out.view(x.size(0), x.size(1), 1, 1) # (B, C, 1, 1)
+        return out * x # (B, C, H, W)
+
 
 class SpatialAttentionModule(nn.Module):
     def __init__(self):
@@ -22,30 +44,26 @@ class PPA(nn.Module):
     def __init__(self, in_features, filters) -> None:
         super().__init__()
 
-        self.skip = conv_block(in_features=in_features,
-                               out_features=filters,
-                               kernel_size=(1, 1),
-                               padding=(0, 0),
-                               norm_type='bn',
-                               activation=False)
-        self.c1 = conv_block(in_features=in_features,
-                             out_features=filters,
-                             kernel_size=(3, 3),
-                             padding=(1, 1),
-                             norm_type='bn',
-                             activation=True)
-        self.c2 = conv_block(in_features=filters,
-                             out_features=filters,
-                             kernel_size=(3, 3),
-                             padding=(1, 1),
-                             norm_type='bn',
-                             activation=True)
-        self.c3 = conv_block(in_features=filters,
-                             out_features=filters,
-                             kernel_size=(3, 3),
-                             padding=(1, 1),
-                             norm_type='bn',
-                             activation=True)
+        self.skip = Conv(c1=in_features,
+                         c2=filters,
+                         k=1,
+                         p=0,
+                         act=False)
+        self.c1 = Conv(c1=in_features,
+                       c2=filters,
+                       k=3,
+                       p=1,
+                       act=nn.ReLU)
+        self.c2 = Conv(c1=filters,
+                       c2=filters,
+                       k=3,
+                       p=1,
+                       act=nn.ReLU)
+        self.c3 = Conv(c1=filters,
+                       c2=filters,
+                       k=3,
+                       p=1,
+                       act=nn.ReLU)
         self.sa = SpatialAttentionModule()
         self.cn = ECA(filters)
         self.lga2 = LocalGlobalAttention(filters, 2)
@@ -102,10 +120,10 @@ class LocalGlobalAttention(nn.Module):
         local_attention = F.softmax(local_patches, dim=-1)  # (B, H/P*W/P, output_dim)
         local_out = local_patches * local_attention  # (B, H/P*W/P, output_dim)
 
-        cos_sim = F.normalize(local_out, dim=-1) @ F.normalize(self.prompt[None, ..., None], dim=1)  # B, N, 1
+        cos_sim = F.normalize(local_out, dim=-1) @ F.normalize(self.prompt[None, ..., None], dim=1)  # (B, H/P*W/P, 1)
         mask = cos_sim.clamp(0, 1)
-        local_out = local_out * mask
-        local_out = local_out @ self.top_down_transform
+        local_out = local_out * mask # token selection
+        local_out = local_out @ self.top_down_transform # (B, H/P*W/P, output_dim) @ (output_dim, output_dim) -> (B, H/P*W/P, output_dim)
 
         # Restore shapes
         local_out = local_out.reshape(B, H // P, W // P, self.output_dim)  # (B, H/P, W/P, output_dim)
@@ -114,66 +132,3 @@ class LocalGlobalAttention(nn.Module):
         output = self.conv(local_out)
 
         return output
-
-
-class ECA(nn.Module):
-    def __init__(self, in_channel, gamma=2, b=1):
-        super(ECA, self).__init__()
-        k = int(abs((math.log(in_channel, 2) + b) / gamma))
-        kernel_size = k if k % 2 else k + 1
-        padding = kernel_size // 2
-        self.pool = nn.AdaptiveAvgPool2d(output_size=1)
-        self.conv = nn.Sequential(
-            nn.Conv1d(in_channels=1, out_channels=1, kernel_size=kernel_size, padding=padding, bias=False),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        out = self.pool(x)
-        out = out.view(x.size(0), 1, x.size(1))
-        out = self.conv(out)
-        out = out.view(x.size(0), x.size(1), 1, 1)
-        return out * x
-
-
-class conv_block(nn.Module):
-    def __init__(self,
-                 in_features,
-                 out_features,
-                 kernel_size=(3, 3),
-                 stride=(1, 1),
-                 padding=(1, 1),
-                 dilation=(1, 1),
-                 norm_type='bn',
-                 activation=True,
-                 use_bias=True,
-                 groups=1
-                 ):
-        super().__init__()
-        self.conv = nn.Conv2d(in_channels=in_features,
-                              out_channels=out_features,
-                              kernel_size=kernel_size,
-                              stride=stride,
-                              padding=padding,
-                              dilation=dilation,
-                              bias=use_bias,
-                              groups=groups)
-
-        self.norm_type = norm_type
-        self.act = activation
-
-        if self.norm_type == 'gn':
-            self.norm = nn.GroupNorm(32 if out_features >= 32 else out_features, out_features)
-        if self.norm_type == 'bn':
-            self.norm = nn.BatchNorm2d(out_features)
-        if self.act:
-            # self.relu = nn.GELU()
-            self.relu = nn.ReLU(inplace=False)
-
-    def forward(self, x):
-        x = self.conv(x)
-        if self.norm_type is not None:
-            x = self.norm(x)
-        if self.act:
-            x = self.relu(x)
-        return x

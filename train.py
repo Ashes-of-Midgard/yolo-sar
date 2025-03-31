@@ -1,10 +1,13 @@
 from ultralytics import YOLO, YOLOAdv, YOLOAdvDn
+
+import torch
+torch.autograd.set_detect_anomaly(True)
 # from ultralytics.models.yolo.detect.train import DetectionAdvTrainer
 
 if __name__=="__main__":
     # 加载预训练的yolo12权重
-    model = YOLO("yolo12m-ppa.yaml", task="detect")
-    check_point_model = YOLO("yolo12m.pt")
+    model = YOLOAdv("yolo12n.yaml", task="detect")
+    check_point_model = YOLO("yolo12n.pt")
     model.load_state_dict(check_point_model.state_dict(), strict=False)
 
     # 用自定义的SAR数据集微调
