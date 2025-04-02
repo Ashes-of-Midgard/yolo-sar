@@ -68,6 +68,7 @@ from ultralytics.nn.modules import (
     WorldDetect,
     v10Detect,
     DN_Res_block,
+    LSKblock,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -498,6 +499,7 @@ class DetectionModelSep(DetectionModel):
     def __init__(self, cfg="yolo11n.yaml", ch=3, nc=None, verbose=True):
         super().__init__(cfg, ch, nc, verbose)
         self.backbone_len, self.backbone_out_layers = parse_model_components(deepcopy(self.yaml))
+        self.feat_channels = [parse_channels(deepcopy(self.yaml))[i] for i in self.backbone_out_layers]
     
     def extract_features(self, x, profile=False, dt=None, visualize=False, output_all=False):
         y = []
@@ -542,7 +544,7 @@ class DetectionModelSep(DetectionModel):
         else:
             return x
     
-    def _predict_once(self, x, profile=False, visualize=False, embed=None):
+    def _predict_once(self, x, mode="preds", profile=False, visualize=False, embed=None):
         """
         Perform a forward pass through the network.
 
@@ -560,77 +562,80 @@ class DetectionModelSep(DetectionModel):
             # And it has to use this branch
             return super()._predict_once(x, profile, visualize, embed)
         dt = []  # outputs
+        if mode=="feats":
+            return self.extract_features(x)
         feats = self.extract_features(x, profile, dt, visualize, True)
         head_outputs = self.head_forward(feats, profile, dt, visualize, True, True)
         y = feats + head_outputs
         if embed:
             embeddings = [torch.nn.functional.adaptive_avg_pool2d(y[i], (1, 1)).squeeze(-1).squeeze(-1) for i in embed]
             return torch.unbind(torch.cat(embeddings, 1), dim=0)
-        else:
+        elif mode=="preds":
             return y[-1]
+        elif mode=="preds&feats":
+            return y[-1], [feats[layer] for layer in self.backbone_out_layers]
 
+    def _predict_augment(self, x, mode):
+        """Perform augmentations on input image x and return augmented inference."""
+        LOGGER.warning(
+            f"WARNING ⚠️ {self.__class__.__name__} does not support 'augment=True' prediction. "
+            f"Reverting to single-scale prediction."
+        )
+        return self._predict_once(x, mode)
 
-class DetectionModelAdvDn(DetectionModelSep):
-    """YOLO detection model with background denoiser and adversarial training"""
-    
-    def __init__(self, cfg="yolo11n.yaml", ch=3, nc=None, verbose=True):
-        super().__init__(cfg, ch, nc, verbose)
-        # init denoisers for each scale
-        kernel_sizes = [make_divisible(i+3, 2)+1 for i in range(len(self.backbone_out_layers))] # [3, 5, 5, ...]
-        feat_channels = [parse_channels(deepcopy(self.yaml))[i] for i in self.backbone_out_layers]
-        self.denoisers = nn.ModuleList([
-            DN_Res_block(in_c=feat_channels[i], reduction=4, kernel_size=kernel_sizes[i])
-            for i in range(len(kernel_sizes))
-        ])
-
-    def forward_adv(self, x, adv_factor):
-        assert isinstance(x, dict), f"Adversarial mode only works for training, so the input must be a dict, but got {type(x)}"
-        # Clean forward
-        features = self.extract_features(x["img"])
-        preds = self.head_forward(features)
-        clean_loss, clean_loss_items = self.loss(x, preds)
-        # Generate masks
-        input_shape = x["img"].shape[1:]
-        bboxes = x["bboxes"]
-        mask = torch.zeros([1, 1, input_shape[1], input_shape[2]], dtype=features[0].dtype, device=features[0].device)
-        for box in bboxes:
-            x_min = int(input_shape[1] * (box[0]-box[2]/2))
-            x_max = int(input_shape[1] * (box[0]+box[2]/2))
-            y_min = int(input_shape[2] * (box[1]-box[3]/2))
-            y_max = int(input_shape[2] * (box[1]+box[3]/2))
-            mask[0, x_min:x_max, y_min:y_max] = 1
-        # Denoise the features and generate adversarial features
-        features_adv = []
-        for i, feat in enumerate(features):
-            # Denoise background
-            foreground_mask = nn.functional.interpolate(mask, size=feat.shape[2:4], mode='nearest')
-            background_mask = 1 - foreground_mask
-            dn_feat_bg = self.denoisers[i](feat * background_mask)
-            dn_feat = dn_feat_bg * background_mask + feat * foreground_mask
-            # Generate adversarial perturbations
-            feat_grad = torch.autograd.grad(clean_loss, feat, retain_graph=True, allow_unused=True)[0]
-            noise = (adv_factor * torch.sign(feat_grad)).detach()
-            feat_adv = dn_feat + noise
-            features_adv.append(feat_adv)
-        # Adv forward
-        preds = self.head_forward(features_adv)
-        adv_loss, adv_loss_items = self.loss(x, preds)
-        
-        return adv_loss, adv_loss_items, clean_loss, clean_loss_items
-        
-    def forward(self, x, adv=False, adv_factor=0.03, *args, **kwargs):
+    def predict(self, x, mode="preds", profile=False, visualize=False, augment=False, embed=None):
         """
+        Perform a forward pass through the network.
+
+        Args:
+            x (torch.Tensor): The input tensor to the model.
+            profile (bool): Print the computation time of each layer if True.
+            visualize (bool): Save the feature maps of the model if True.
+            augment (bool): Augment image during prediction.
+            embed (list, optional): A list of feature vectors/embeddings to return.
+
+        Returns:
+            (torch.Tensor): The last output of the model.
+        """
+        if augment:
+            return self._predict_augment(x, mode)
+        return self._predict_once(x, mode, profile, visualize, embed)
+    
+    def forward(self, x, preds=None, mode=None, *args, **kwargs):
+        """
+        Perform forward pass of the model for either training or inference.
+
+        If x is a dict, calculates and returns the loss for training. Otherwise, returns predictions for inference.
+
         Args:
             x (torch.Tensor | dict): Input tensor for inference, or dict with image tensor and labels for training.
-            clean_loss (torch.Tensor | None): The loss value calculated during clean forward, only used for adversarial training
-            adv (bool): Whether to generate adversarial training. If adv is True, clean_loss must be a Tensor to calculate the gradients.
-            training_clean (bool): Whether to train the model on clean samples. If True, the gradients of clean_loss with respect to models'
-                weights will be accumulated and used for optimization. If not, only the gradients of adv_loss will be used for models' optimization.
+            *args (Any): Variable length argument list.
+            **kwargs (Any): Arbitrary keyword arguments.
+
+        Returns:
+            (torch.Tensor): Loss if x is a dict (training), or network predictions (inference).
         """
-        if not adv:
-            return super().forward(x, *args, **kwargs)
-        else:
-            return self.forward_adv(x, adv_factor)
+        if mode is None: # auto select
+            if isinstance(x, dict):  # for cases of training and validating while training.
+                return self.loss(x, preds, *args, **kwargs)
+            return self.predict(x, *args, **kwargs)
+        elif mode=="loss":
+            return self.loss(x, preds, *args, **kwargs)
+        elif mode in ("preds", "feats", "preds&feats"):
+            if isinstance(x, dict):
+                img = x["img"]
+            else:
+                img = x
+            return self.predict(img, mode, *args, **kwargs)
+        elif mode=="loss&feats":
+            if isinstance(x, dict):
+                img = x["img"]
+            else:
+                img = x
+            preds, feats = self.predict(img, "preds&feats")
+            return self.loss(x, preds, *args, **kwargs), feats
+        elif mode=="head":
+            return self.head_forward(x)
 
 
 class OBBModel(DetectionModel):
@@ -1370,6 +1375,9 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
+        elif m is LSKblock: # LSKblock expects no arguments than c1
+            c1 = ch[f]
+            args = [c1]
         else:
             c2 = ch[f]
 
