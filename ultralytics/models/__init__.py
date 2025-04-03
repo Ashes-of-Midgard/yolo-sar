@@ -4,6 +4,6 @@ from .fastsam import FastSAM
 from .nas import NAS
 from .rtdetr import RTDETR
 from .sam import SAM
-from .yolo import YOLO, YOLOWorld, YOLOAdv, YOLOAdvDn
+from .yolo import YOLO, YOLOWorld, YOLOAdv
 
-__all__ = "YOLO", "RTDETR", "SAM", "FastSAM", "NAS", "YOLOWorld", "YOLOAdv", "YOLOAdvDn"  # allow simpler import
+__all__ = "YOLO", "RTDETR", "SAM", "FastSAM", "NAS", "YOLOWorld", "YOLOAdv"  # allow simpler import

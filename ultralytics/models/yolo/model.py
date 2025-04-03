@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ultralytics.engine.model import Model
 from ultralytics.models import yolo
-from ultralytics.nn.tasks import ClassificationModel, DetectionModel, DetectionModelSep, OBBModel, PoseModel, SegmentationModel, WorldModel
+from ultralytics.nn.tasks import ClassificationModel, DetectionModel, OBBModel, PoseModel, SegmentationModel, WorldModel
 from ultralytics.utils import ROOT, yaml_load
 
 
@@ -89,48 +89,12 @@ class YOLOAdv(YOLO):
             },
             "obb": {
                 "model": OBBModel,
-                "trainer": yolo.obb.OBBTrainer,
+                "trainer": yolo.obb.OBBAdvTrainer,
                 "validator": yolo.obb.OBBValidator,
                 "predictor": yolo.obb.OBBPredictor,
             },
         }
 
-class YOLOAdvDn(YOLO):
-    @property
-    def task_map(self):
-        """Map head to model, trainer, validator, and predictor classes."""
-        return {
-            "classify": {
-                "model": ClassificationModel,
-                "trainer": yolo.classify.ClassificationTrainer,
-                "validator": yolo.classify.ClassificationValidator,
-                "predictor": yolo.classify.ClassificationPredictor,
-            },
-            "detect": {
-                "model": DetectionModelSep,
-                "trainer": yolo.detect.DetectionDnAdvTrainer,
-                "validator": yolo.detect.DetectionValidator,
-                "predictor": yolo.detect.DetectionPredictor,
-            },
-            "segment": {
-                "model": SegmentationModel,
-                "trainer": yolo.segment.SegmentationTrainer,
-                "validator": yolo.segment.SegmentationValidator,
-                "predictor": yolo.segment.SegmentationPredictor,
-            },
-            "pose": {
-                "model": PoseModel,
-                "trainer": yolo.pose.PoseTrainer,
-                "validator": yolo.pose.PoseValidator,
-                "predictor": yolo.pose.PosePredictor,
-            },
-            "obb": {
-                "model": OBBModel,
-                "trainer": yolo.obb.OBBTrainer,
-                "validator": yolo.obb.OBBValidator,
-                "predictor": yolo.obb.OBBPredictor,
-            },
-        }
 
 class YOLOWorld(Model):
     """YOLO-World object detection model."""
