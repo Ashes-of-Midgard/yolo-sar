@@ -20,8 +20,7 @@ __all__ = (
     "SpatialAttention",
     "CBAM",
     "Concat",
-    "RepConv",
-    "Index",
+    "RepConv"
 )
 
 
@@ -712,6 +711,7 @@ class Index(nn.Module):
             (torch.Tensor): Selected tensor.
         """
         return x[self.index]
+
 
 class DN_Res_block(nn.Module):
     def __init__(self, in_c=48, reduction=4, kernel_size=3):

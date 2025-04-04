@@ -5,6 +5,7 @@ conda create -n yolo-sar python=3.11 -y
 conda activate yolo-sar
 # 这里我使用的是CUDA 11.8的环境，请根据CUDA版本选择对应的安装命令
 pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install PyWavelets
 git clone https://github.com/Ashes-of-Midgard/yolo-sar.git
 cd yolo-sar
 pip install -e . -v
