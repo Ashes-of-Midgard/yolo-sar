@@ -79,6 +79,8 @@ from .conv import (
     SpatialAttention,
     DN_Res_block,
 )
+from .wtconv import WTConv
+from .afpn import AFPN
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (
     AIFI,
@@ -172,4 +174,6 @@ __all__ = (
     "C2fPPA",
     "C3k2PPA",
     "LSKblock",
+    "WTConv",
+    "AFPN"
 )

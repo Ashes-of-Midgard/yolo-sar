@@ -69,6 +69,8 @@ from ultralytics.nn.modules import (
     v10Detect,
     DN_Res_block,
     LSKblock,
+    WTConv,
+    AFPN
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -102,6 +104,7 @@ BASE_MODULES = frozenset(
     {
         Classify,
         Conv,
+        WTConv,
         ConvTranspose,
         GhostConv,
         Bottleneck,
@@ -1212,6 +1215,14 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
+        elif m is AFPN:
+            c1_list = args[0]
+            c2 = args[1] # out put channels are assigned in args[1]
+            c1_list_scaled = []
+            for c1 in c1_list: # scale input and output channels according to model scale
+                c1_list_scaled.append(make_divisible(min(c1, max_channels) * width, 8))
+            c2 = make_divisible(min(c2, max_channels) * width, 8)
+            args = [c1_list_scaled, c2, *args[2:]] # replace the input and output channels
         elif m in frozenset({Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}):
             args.append([ch[x] for x in f])
             if m is Segment:
