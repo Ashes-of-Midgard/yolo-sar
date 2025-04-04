@@ -1,4 +1,4 @@
-# Installation
+# 环境配置
 
 ```
 conda create -n yolo-sar python=3.11 -y
@@ -11,7 +11,8 @@ cd yolo-sar
 pip install -e . -v
 ```
 
-# Datasets & Weights
+# 任务：目标检测
+## 数据集和预训练权重
 
 数据集从百度云盘下载，格式都经过处理
 
@@ -32,30 +33,72 @@ pip install -e . -v
 4. SARdet_100K_yolo: https://pan.baidu.com/s/1UOVfJZpqcoX_AoCq6xBTzw?pwd=9nce 提取码: 9nce
 
 训练过程中会自动下载yolo12m和yolo11n预训练权重，如果网络不畅，没法自动下载，请从此处下载: https://pan.baidu.com/s/1hDinFXOZOVSZvCmrwUigqg?pwd=apbn 提取码: apbn
-并且放置在和train.py同一级目录下
+并且放置在和train_det.py同一级目录下
 
-要选择哪一个数据集进行训练，只需要找到对应数据集目录下面的```dataset.yaml```文件，复制该文件的路径替代掉```train.py```当中的
+要选择哪一个数据集进行训练，只需要找到对应数据集目录下面的```dataset.yaml```文件，复制该文件的路径替代掉```train_det.py```当中的
 ```
-results = model.train(data="/root/yolo-sar/datasets/OGSOD_yolo/dataset.yaml", epochs=100)
+results = model.train(data="datasets/OGSOD_yolo/dataset.yaml", epochs=100)
 ```
 还需要修改```dataset.yaml```当中的```path:```，将其修改为数据集所在的路径。
 
 
-# Train
+## 训练
 
 我们先用yolo12m作为基准模型，后续根据比赛具体评测设备调整。在OGSOD_yolo上微调100轮来评估各个模块是否有效，等实验出有效的模块以后再换到SARdet_100K_yolo进行完整的训练。
 
 ```
-python train.py
+python train_det.py
 ```
 
 如果只评测不训练，就把代码当中的
 ```
-results = model.train(data="/root/yolo-sar/datasets/OGSOD_yolo/dataset.yaml", epochs=100)
+results = model.train(data="datasets/OGSOD_yolo/dataset.yaml", epochs=100)
 ```
 注释掉。
 
-# Contribution Guideline
+# 任务：旋转检测
+## 数据集
+
+数据集从百度云盘下载，格式都经过处理
+
+放置在
+```
+|- yolo-sar
+    |- datasets
+        |- RSDD-SAR-yolo
+        |- SRSDD-V1.0-yolo
+        |- RSAR-yolo
+```
+
+下载链接：
+1. RSDD-yolo:
+2. SRSDD-V1.0-yolo:
+3. RSAR-yolo:
+
+训练过程中会自动下载yolo12m和yolo11n预训练权重，如果网络不畅，没法自动下载，请从此处下载: https://pan.baidu.com/s/1hDinFXOZOVSZvCmrwUigqg?pwd=apbn 提取码: apbn
+并且放置在和train_obb.py同一级目录下
+
+要选择哪一个数据集进行训练，只需要找到对应数据集目录下面的```dataset.yaml```文件，复制该文件的路径替代掉```train_obb.py```当中的
+```
+results = model.train(data="datasets/SRSDD-V1.0-yolo/dataset.yaml", epochs=100)
+```
+还需要修改```dataset.yaml```当中的```path:```，将其修改为数据集所在的路径。
+
+## 训练
+
+我们先用yolo12n-obb作为基准模型，后续根据比赛具体评测设备调整。在SRSDD-V1.0-yolo上训练100轮来评估各个模块是否有效，等实验出有效的模块以后再换到RSAR-yolo进行完整的训练。
+
+```
+python train_obb.py
+```
+
+如果只评测不训练，就把代码当中的
+```
+results = model.train(data="datasets/SRSDD-V1.0-yolo/dataset.yaml", epochs=100)
+```
+注释掉。
+
+# 怎样修改代码
 
 !!! 修改代码之前看这里 !!!
 
@@ -129,10 +172,12 @@ def parse_model(d, ch, verbose=True):
         elif m is MyModule:
             # 在这里增加解析配置文件里参数并初始化MyModule实例的代码
 ```
-要启用该模块，就在配置文件的正确位置写入该模块，然后在```train.py```当中读取该配置文件进行模型初始化，如：
+要启用该模块，就在配置文件的正确位置写入该模块，将这个配置文件保存至指定的位置(推荐保存至```ultralytics/cfg/models/12/```)，命名方式推荐为"yolo12(-任务名)-自定义后缀.yaml"，如果是水平框检测模型，不需要指定任务名，但如果是旋转检测模型，需要指定任务名为"obb".
+然后在```train_det.py```或```train_obb.py```当中读取该配置文件进行模型初始化，如：
 ```python
-    model = YOLO("my_yolo12m.yaml")
+    model = YOLO("yolo12m-custom.yaml")
 ```
+按照推荐方式存储和命名配置文件后，库函数能够自动解析跟随在yolo12后面的模型尺寸参数"n,s,m,l,x".
 
 ## 修改模型
 有些模块与模型耦合程度比较高，它可能需要在训练和推理阶段分别执行不同的功能，这种情况下就需要对YOLO模型本身进行修改。
@@ -170,11 +215,11 @@ ultralytics库的训练流程是通过Trainer类实现的. 基类```BaseTrainer`
 对于这部分的改动，建议：
 1. 如果是针对检测任务的特殊改动，可以在```ultralytics/models/yolo/detect/train.py```里面直接继承```DetectionTrainer```设计新的训练器。
 
-2. 如果是不区分任务类型的改动，比如对抗训练，可以在```ultralytics/engine/trainer.py```里设计一个类模板函数，给定任意的训练器类型，都可以返回继承传入类型的子类。具体可以参考```ultralytics/engine/trainer.py```里面设计的函数```convert_to_adv```。然后再在```ultralytics/models/yolo/detect/train.py```通过该函数生成```DetectionTrainer```的子类。
+2. 如果是不区分任务类型的改动，比如对抗训练，可以在```ultralytics/engine/trainer.py```里继承```BaseTrainer```，设计新的训练器```MyTrainer```. 然后在```ultralytics/models/yolo/detect/train.py```里导入并继承```MyTrainer```，设计```MyDetectionTrainer```.
 
 改动训练器，关键是修改其```_do_train```函数，该函数里包括模型前向传播和反向梯度求导更新的代码。
 
-修改完成后，无论是直接继承```DetectionTrainer```定义子类，还是使用类模板函数生成子类，都应该在```ultralytics/models/yolo/detect/train.py```里有一个```DetectionTrainer```的子类，记为```MyDetectionTrainer```。将这个子类在文件```ultralytics/models/yolo/detect/__init__.py```当中导入，并写进列表```__ALL__```当中。确保可以在```yolo-sar/ultralytics/models/yolo/model.py```当中导入该类。
+修改完成后，无论是直接继承```DetectionTrainer```定义子类，还是继承新的训练器```CustomTrainer```，都应该在```ultralytics/models/yolo/detect/train.py```里有一个```MyDetectionTrainer```。将这个子类在文件```ultralytics/models/yolo/detect/__init__.py```当中导入，并写进列表```__ALL__```当中。确保可以在```yolo-sar/ultralytics/models/yolo/model.py```当中导入该类。
 
 在```ultralytics/models/yolo/model.py```当中，继承```YOLO```类型，定义一个新的模型类型，记为```MyYOLO```。复制```YOLO```当中的```task_map```函数，修改返回字典的detect.trainer字段的值为```MyDetectionTrainer```，如下所示：
 ```python
