@@ -71,9 +71,9 @@ results = model.train(data="datasets/OGSOD_yolo/dataset.yaml", epochs=100)
 ```
 
 下载链接：
-1. RSDD-yolo:
-2. SRSDD-V1.0-yolo:
-3. RSAR-yolo:
+1. RSDD-SAR-yolo: https://pan.baidu.com/s/1DqLk3aTWkHrSQ2RawTmvow?pwd=5ppc 提取码: 5ppc
+2. SRSDD-V1.0-yolo: https://pan.baidu.com/s/1gR8gVsDCqDjORE8S3VKkow?pwd=4w8i 提取码:4w8i
+3. RSAR-yolo: 
 
 训练过程中会自动下载yolo12m和yolo11n预训练权重，如果网络不畅，没法自动下载，请从此处下载: https://pan.baidu.com/s/1hDinFXOZOVSZvCmrwUigqg?pwd=apbn 提取码: apbn
 并且放置在和train_obb.py同一级目录下
