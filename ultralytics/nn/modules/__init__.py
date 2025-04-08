@@ -61,6 +61,7 @@ from .block import (
     TorchVision,
     C2fPPA,
     C3k2PPA,
+    C3k2_SCConv
 )
 from .conv import (
     CBAM,
@@ -176,4 +177,5 @@ __all__ = (
     "LSKblock",
     "WTConv",
     "AFPN"
+    "C3k2_SCConv",
 )

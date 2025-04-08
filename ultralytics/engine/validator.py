@@ -127,10 +127,7 @@ class BaseValidator:
 
         self.plots = {}
         self.callbacks = _callbacks or callbacks.get_default_callbacks()
-        if self.args.plot_num:
-            self.plot_num = self.args.plot_num
-        else:
-            self.plot_num = 3
+        self.plot_num = self.args.plot_num
 
     @smart_inference_mode()
     def __call__(self, trainer=None, model=None):
