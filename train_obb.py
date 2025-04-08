@@ -16,7 +16,7 @@ if __name__=="__main__":
     model.load_state_dict(convert_state_dict_obb(model_pretrained.state_dict()), strict=False)
 
     # 用自定义的SAR数据集训练/微调
-    results = model.train(data="datasets/SRSDD-V1.0-yolo/dataset.yaml", epochs=300, amp=False, batch=8) # 不建议开启混合精度，非常容易出现数据溢出
+    results = model.train(data="datasets/SRSDD-V1.0-yolo/dataset.yaml", epochs=100, amp=True, batch=8) # 不建议开启混合精度，非常容易出现数据溢出
 
     # 评测模型的效果
     results = model.val(batch=1, vis_num=100)
