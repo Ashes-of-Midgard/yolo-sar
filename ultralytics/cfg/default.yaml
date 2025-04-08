@@ -54,6 +54,7 @@ max_det: 300 # (int) maximum number of detections per image
 half: False # (bool) use half precision (FP16)
 dnn: False # (bool) use OpenCV DNN for ONNX inference
 plots: True # (bool) save plots and images during train/val
+plot_num: 3 # (int) numbers of plot pred batches
 
 # Predict settings -----------------------------------------------------------------------------------------------------
 source: # (str, optional) source directory for images or videos

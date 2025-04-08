@@ -127,6 +127,10 @@ class BaseValidator:
 
         self.plots = {}
         self.callbacks = _callbacks or callbacks.get_default_callbacks()
+        if self.args.plot_num:
+            self.plot_num = self.args.plot_num
+        else:
+            self.plot_num = 3
 
     @smart_inference_mode()
     def __call__(self, trainer=None, model=None):
@@ -223,7 +227,7 @@ class BaseValidator:
                 preds = self.postprocess(preds)
 
             self.update_metrics(preds, batch)
-            if self.args.plots and batch_i < 3:
+            if self.args.plots and batch_i < self.max_vis_num:
                 self.plot_val_samples(batch, batch_i)
                 self.plot_predictions(batch, preds, batch_i)
 

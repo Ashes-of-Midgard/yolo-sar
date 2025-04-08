@@ -30,7 +30,7 @@ pip install -e . -v
 1. OGSOD_yolo: https://pan.baidu.com/s/1xnEms0zsWt96TuVukf2sqg?pwd=ptk3 提取码: ptk3
 2. SAR_AIRcraft_yolo: https://pan.baidu.com/s/1bpNylbInJDFTYSefxuaKCg?pwd=8gmg 提取码: 8gmg
 3. SSDD_yolo: https://pan.baidu.com/s/1j115aAKD3hWvdauUNn36eQ?pwd=erhv 提取码: erhv
-4. SARdet_100K_yolo: https://pan.baidu.com/s/1UOVfJZpqcoX_AoCq6xBTzw?pwd=9nce 提取码: 9nce
+4. SARdet_100K_yolo: https://pan.baidu.com/s/1aDSrNrQObyivGN0y-bWYIw?pwd=61ew 提取码: 61ew
 
 训练过程中会自动下载yolo12m和yolo11n预训练权重，如果网络不畅，没法自动下载，请从此处下载: https://pan.baidu.com/s/1hDinFXOZOVSZvCmrwUigqg?pwd=apbn 提取码: apbn
 并且放置在和train_det.py同一级目录下

@@ -54,9 +54,9 @@ def convert_state_dict_wtconv(state_dict:dict) -> dict:
     for key, value in state_dict.items():
         key_split = key.split(".")
         layer_num = int(key_split[2])
-        if layer_num >= 2 and layer_num <= 4:
+        if layer_num >= 2 and layer_num < 5:
             converted_layer_num = layer_num+1
-        elif layer_num >= 4:
+        elif layer_num >= 5:
             converted_layer_num = layer_num+2
         else:
             converted_layer_num = layer_num
@@ -82,4 +82,31 @@ def convert_state_dict_obb(state_dict:dict) -> dict:
         layer_num = int(key_split[2])
         if layer_num < 21:
             converted_state_dict[key] = value
+    return converted_state_dict
+
+
+def convert_state_dict_obb_wtconv(state_dict:dict) -> dict:
+    """ 将预训练yolo12权重转化为yolo12-obb-wtconv结构
+        删除最后检测头的权重
+        并且增加部分权重的层数以插入wtconv模块
+    """
+    converted_state_dict = {}
+    for key, value in state_dict.items():
+        key_split = key.split(".")
+        layer_num = int(key_split[2])
+        if layer_num >= 0 and layer_num < 2:
+            converted_layer_num = layer_num
+        if layer_num >= 2 and layer_num < 5:
+            converted_layer_num = layer_num+1
+        elif layer_num >= 5 and layer_num < 21:
+            converted_layer_num = layer_num+2
+        converted_key = ""
+        for i in range(2):
+            converted_key += key_split[i]
+            converted_key += "."
+        converted_key += str(converted_layer_num)
+        for i in range(3, len(key_split)):
+            converted_key += "."
+            converted_key += key_split[i]
+        converted_state_dict[converted_key] = value
     return converted_state_dict
