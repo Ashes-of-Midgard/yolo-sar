@@ -70,7 +70,8 @@ from ultralytics.nn.modules import (
     DN_Res_block,
     LSKblock,
     WTConv,
-    AFPN
+    AFPN,
+    C3k2_SCConv,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -140,6 +141,7 @@ BASE_MODULES = frozenset(
         C2fCIB,
         A2C2f,
         A2C2fPPA,
+        C3k2_SCConv,
     }
 )
 REPEAT_MODULES = frozenset(  # modules with 'repeat' arguments
@@ -161,6 +163,7 @@ REPEAT_MODULES = frozenset(  # modules with 'repeat' arguments
         C2PSA,
         A2C2f,
         A2C2fPPA,
+        C3k2_SCConv,
     }
 )
 
@@ -1193,7 +1196,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             if m in REPEAT_MODULES:
                 args.insert(2, n)  # number of repeats
                 n = 1
-            if m in (C3k2, C3k2PPA):  # for M/L/X sizes
+            if m in (C3k2, C3k2PPA, C3k2_SCConv):  # for M/L/X sizes
                 legacy = False
                 if scale in "mlx":
                     args[3] = True
