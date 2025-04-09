@@ -82,6 +82,7 @@ from .conv import (
 )
 from .wtconv import WTConv
 from .afpn import AFPN
+from .deno_attention import DCTDenoAttention
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (
     AIFI,
@@ -178,4 +179,5 @@ __all__ = (
     "WTConv",
     "AFPN"
     "C3k2_SCConv",
+    "DCTDenoAttention",
 )
