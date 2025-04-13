@@ -1,293 +1,10 @@
 """ DCT Deno Attention
     from: https://arxiv.org/abs/2406.02833
 """
-# Copyright (c) OpenMMLab. All rights reserved.
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-class DCT2DSpatialTransformLayer(nn.Module):
-    def __init__(self, width, height):
-        super(DCT2DSpatialTransformLayer, self).__init__()
-        self.dct_x = DCT2DSpatialTransformLayer_x(width)
-        self.dct_y = DCT2DSpatialTransformLayer_y(height)
-
-    def forward(self, x):
-        # x = x.double()
-        y = self.dct_x(x)
-        y = self.dct_y(y)
-
-        return y
-
-
-class IDCT2DSpatialTransformLayer(nn.Module):
-    def __init__(self, width, height):
-        super(IDCT2DSpatialTransformLayer, self).__init__()
-        self.idct_x = IDCT2DSpatialTransformLayer_x(width)
-        self.idct_y = IDCT2DSpatialTransformLayer_y(height)
-
-    def forward(self, x):
-        y = self.idct_x(x)
-        y = self.idct_y(y)
-        # y = y.float()
-
-        return y
-
-
-class FastDCT2DSpatialTransformLayer(nn.Module):
-    def __init__(self, width, height):
-        super(FastDCT2DSpatialTransformLayer, self).__init__()
-        self.dct_x = FastDCT2DSpatialTransformLayer_x(width)
-        self.dct_y = FastDCT2DSpatialTransformLayer_y(height)
-
-    def forward(self, x):
-        # x = x.double()
-        # b,c,h,w
-        y = self.dct_x(x.permute(0, 3, 2, 1))  # channel 和 width 互换 b,w,h,c
-        y = self.dct_y(y.permute(0, 2, 1, 3))  # width 和 height 互换 b,h,w,c
-        y = y.permute(0, 3, 1, 2)  # 复原 b,c,h,w
-
-        return y
-
-
-class FastIDCT2DSpatialTransformLayer(nn.Module):
-    def __init__(self, width, height):
-        super(FastIDCT2DSpatialTransformLayer, self).__init__()
-        self.idct_x = FastIDCT2DSpatialTransformLayer_x(width)
-        self.idct_y = FastIDCT2DSpatialTransformLayer_y(height)
-
-    def forward(self, x):
-        # b,c,h,w
-        y = self.idct_x(x.permute(0, 3, 2, 1))  # channel 和 width 互换 b,w,h,c
-        y = self.idct_y(y.permute(0, 2, 1, 3))  # width 和 height 互换 b,h,w,c
-        y = y.permute(0, 3, 1, 2)  # 复原 b,c,h,w
-        # y = y.float()
-
-        return y
-
-
-class DCT2DSpatialTransformLayer_x(nn.Module):
-    def __init__(self, width):
-        super(DCT2DSpatialTransformLayer_x, self).__init__()
-        self.register_buffer('weight', self.get_dct_filter(width))
-
-    def get_dct_filter(self, width):
-        # dct_filter = torch.zeros(width, width, dtype=torch.float64)
-        dct_filter = torch.zeros(width, width)
-        for v in range(width):
-            for j in range(width):
-                DCT_base_x = math.cos(math.pi * (0.5 + j) * v / width) / math.sqrt(width)
-                if v != 0:
-                    DCT_base_x = DCT_base_x * math.sqrt(2)
-                dct_filter[v, j] = DCT_base_x
-
-        return dct_filter
-
-    def forward(self, x):
-        dct_components = []
-
-        for weight in self.weight.split(1, dim=0):
-            dct_component = x * weight.view(1, 1, 1, x.shape[3]).expand_as(x)
-            dct_components.append(dct_component.sum(3).unsqueeze(3))
-
-        result = torch.concat(dct_components, dim=3)
-
-        return result
-
-
-class FastDCT2DSpatialTransformLayer_x(nn.Module):
-    def __init__(self, width):
-        super(FastDCT2DSpatialTransformLayer_x, self).__init__()
-        self.register_buffer('weight', self.get_dct_filter(width))
-
-    def get_dct_filter(self, width):
-        # dct_filter = torch.zeros(width, width, dtype=torch.float64)
-        dct_filter = torch.zeros(width, width)
-        for v in range(width):
-            for j in range(width):
-                DCT_base_x = math.cos(math.pi * (0.5 + j) * v / width) / math.sqrt(width)
-                if v != 0:
-                    DCT_base_x = DCT_base_x * math.sqrt(2)
-                dct_filter[v, j] = DCT_base_x
-
-        return dct_filter
-
-    def forward(self, input):
-        result = F.conv2d(input, self.weight.unsqueeze(2).unsqueeze(3))
-        return result
-
-
-class IDCT2DSpatialTransformLayer_x(nn.Module):
-    def __init__(self, width):
-        super(IDCT2DSpatialTransformLayer_x, self).__init__()
-        self.register_buffer('weight', self.get_dct_filter(width))
-
-    def get_dct_filter(self, width):
-        # dct_filter = torch.zeros(width, width, dtype=torch.float64)
-        dct_filter = torch.zeros(width, width)
-        for v in range(width):
-            for j in range(width):
-                DCT_base_x = math.cos(math.pi * (0.5 + v) * j / width) / math.sqrt(width)
-                if j != 0:
-                    DCT_base_x = DCT_base_x * math.sqrt(2)
-                dct_filter[v, j] = DCT_base_x
-
-        return dct_filter
-
-    def forward(self, x):
-        dct_components = []
-
-        for weight in self.weight.split(1, dim=0):
-            dct_component = x * weight.view(1, 1, 1, x.shape[3]).expand_as(x)
-            dct_components.append(dct_component.sum(3).unsqueeze(3))
-
-        result = torch.concat(dct_components, dim=3)
-
-        return result
-
-
-class FastIDCT2DSpatialTransformLayer_x(nn.Module):
-    def __init__(self, width):
-        super(FastIDCT2DSpatialTransformLayer_x, self).__init__()
-        self.register_buffer('weight', self.get_dct_filter(width))
-
-    def get_dct_filter(self, width):
-        # dct_filter = torch.zeros(width, width, dtype=torch.float64)
-        dct_filter = torch.zeros(width, width)
-        for v in range(width):
-            for j in range(width):
-                DCT_base_x = math.cos(math.pi * (0.5 + v) * j / width) / math.sqrt(width)
-                if j != 0:
-                    DCT_base_x = DCT_base_x * math.sqrt(2)
-                dct_filter[v, j] = DCT_base_x
-
-        return dct_filter
-
-    def forward(self, input):
-        result = F.conv2d(input, self.weight.unsqueeze(2).unsqueeze(3))
-        return result
-
-
-class DCT2DSpatialTransformLayer_y(nn.Module):
-    def __init__(self, height):
-        super(DCT2DSpatialTransformLayer_y, self).__init__()
-        self.register_buffer('weight', self.get_dct_filter(height))
-
-    def get_dct_filter(self, height):
-        # dct_filter = torch.zeros(height, height, dtype=torch.float64)
-        dct_filter = torch.zeros(height, height)
-        for k in range(height):
-            for i in range(height):
-                DCT_base_y = math.cos(math.pi * (0.5 + i) * k / height) / math.sqrt(height)
-                if k != 0:
-                    DCT_base_y = DCT_base_y * math.sqrt(2)
-                dct_filter[k, i] = DCT_base_y
-
-        return dct_filter
-
-    def forward(self, x):
-        dct_components = []
-
-        for weight in self.weight.split(1, dim=0):
-            dct_component = x * weight.view(1, 1, x.shape[2], 1).expand_as(x)
-            dct_components.append(dct_component.sum(2).unsqueeze(2))
-
-        result = torch.concat(dct_components, dim=2)
-
-        return result
-
-
-class FastDCT2DSpatialTransformLayer_y(nn.Module):
-    def __init__(self, height):
-        super(FastDCT2DSpatialTransformLayer_y, self).__init__()
-        self.register_buffer('weight', self.get_dct_filter(height))
-
-    def get_dct_filter(self, height):
-        # dct_filter = torch.zeros(height, height, dtype=torch.float64)
-        dct_filter = torch.zeros(height, height)
-        for k in range(height):
-            for i in range(height):
-                DCT_base_y = math.cos(math.pi * (0.5 + i) * k / height) / math.sqrt(height)
-                if k != 0:
-                    DCT_base_y = DCT_base_y * math.sqrt(2)
-                dct_filter[k, i] = DCT_base_y
-
-        return dct_filter
-
-    def forward(self, input):
-        result = F.conv2d(input, self.weight.unsqueeze(2).unsqueeze(3))
-        return result
-
-
-class IDCT2DSpatialTransformLayer_y(nn.Module):
-    def __init__(self, height):
-        super(IDCT2DSpatialTransformLayer_y, self).__init__()
-        self.register_buffer('weight', self.get_dct_filter(height))
-
-    def get_dct_filter(self, height):
-        # dct_filter = torch.zeros(height, height, dtype=torch.float64)
-        dct_filter = torch.zeros(height, height)
-        for k in range(height):
-            for i in range(height):
-                DCT_base_y = math.cos(math.pi * (0.5 + k) * i / height) / math.sqrt(height)
-                if i != 0:
-                    DCT_base_y = DCT_base_y * math.sqrt(2)
-                dct_filter[k, i] = DCT_base_y
-
-        return dct_filter
-
-    def forward(self, x):
-        dct_components = []
-
-        for weight in self.weight.split(1, dim=0):
-            dct_component = x * weight.view(1, 1, x.shape[2], 1).expand_as(x)
-            dct_components.append(dct_component.sum(2).unsqueeze(2))
-
-        result = torch.concat(dct_components, dim=2)
-
-        return result
-
-
-class FastIDCT2DSpatialTransformLayer_y(nn.Module):
-    def __init__(self, height):
-        super(FastIDCT2DSpatialTransformLayer_y, self).__init__()
-        self.register_buffer('weight', self.get_dct_filter(height))
-
-    def get_dct_filter(self, height):
-        # dct_filter = torch.zeros(height, height, dtype=torch.float64)
-        dct_filter = torch.zeros(height, height)
-        for k in range(height):
-            for i in range(height):
-                DCT_base_y = math.cos(math.pi * (0.5 + k) * i / height) / math.sqrt(height)
-                if i != 0:
-                    DCT_base_y = DCT_base_y * math.sqrt(2)
-                dct_filter[k, i] = DCT_base_y
-
-        return dct_filter
-
-    def forward(self, input):
-        result = F.conv2d(input, self.weight.unsqueeze(2).unsqueeze(3))
-        return result
-
-class GroupAttentionlayer(nn.Module):
-    def __init__(self, channel, groups):
-        super(GroupAttentionlayer, self).__init__()
-        self.fc1 = nn.Conv1d(channel, channel, 1, groups=groups)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Conv1d(channel, channel, 1, groups=groups)
-        self.sig = nn.Sigmoid()
-        
-    def forward(self, x):
-        b,c,h,w = x.size()
-        y = (x.mean(1) + x.max(1)[0]).view(b,h*w,1)
-        y = self.fc1(y)
-        y = self.relu(y)
-        y = self.fc2(y)
-        y = self.sig(y).view(b, 1, h, w).expand_as(x)
-        return y * x
 
 class SelectBlock(nn.Conv1d):
     def __init__(self, channels, branches):
@@ -315,6 +32,7 @@ class SelectBlock(nn.Conv1d):
                           + torch.gather(branch_tensors, 1, branch_max[:,i,...].unsqueeze(1)).squeeze(1) * max_offset[:,i,...])
 
         return y.sum(1)
+
 
 class SelectGroupFClayer(nn.Module):
     def __init__(self, channel):
@@ -354,8 +72,7 @@ class SelectGroupFClayer(nn.Module):
             nn.Sigmoid(),
         )
         self.select2 = SelectBlock(channel,4)
-
-        
+    
     def forward(self, x):
         b,c,h,w = x.size()
         y = x.clone().reshape(b,h*w,c)
@@ -375,74 +92,107 @@ class SelectGroupFClayer(nn.Module):
         
         return att.view(b,1,h,w).expand_as(x) * x
 
-class SpatialFCAttentionlayer(nn.Module):
-    def __init__(self, channel, reduction):
-        super(SpatialFCAttentionlayer, self).__init__()
-        self.fc1 = nn.Linear(channel, channel // reduction)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(channel // reduction, channel)
-        self.sig = nn.Sigmoid()
-        
-    def forward(self, x):
-        b,c,h,w = x.size()
-        y = (x.mean(1) + x.max(1)[0]).view(b,h*w)
-        y = self.fc1(y)
-        y = self.relu(y)
-        y = self.fc2(y)
-        y = self.sig(y)
-        y = y.view(b, 1, h, w).expand_as(x)
-        return y * x
 
-class groupspatiallayer(nn.Module):
-    def __init__(self, channel, groups):
-        super(groupspatiallayer, self).__init__()
-        self.fc1 = nn.Conv1d(channel, channel, 1, groups=groups)
-        self.sig = nn.Sigmoid()
-        
-    def forward(self, x):
-        b,c,h,w = x.size()
-        y = (x.mean(1) + x.max(1)[0]).view(b,h*w,1)
-        y = self.fc1(y)
-        y = self.sig(y)
-        y = y.view(b, 1, h, w).expand_as(x)
-        return y * x
+class SimpleFCLayer(nn.Module):
+    def __init__(self, channel):
+        super().__init__()
+        self.fc = nn.Conv1d(channel, channel, 1)
     
-class SElayer(nn.Module):
-    def __init__(self, channel, reduction):
-        super(SElayer, self).__init__()
-        self.fc1 = nn.Linear(channel, channel // reduction)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(channel // reduction, channel)
-        self.sig = nn.Sigmoid()
     def forward(self, x):
         b,c,h,w = x.size()
-        y = x.mean(dim=[2,3])
-        y = self.fc1(y)
-        y = self.relu(y)
-        y = self.fc2(y)
-        y = self.sig(y)
-        x = y.unsqueeze(2).unsqueeze(3).expand_as(x) * x
+        x = x.permute(0,2,3,1).reshape(b,h*w,c)
+        x = self.fc(x)
+        x = x.reshape(b,h,w,c).permute(0,3,1,2)
         return x
     
 
-class DCTDenoAttention(nn.Module):
+class AdaFreqMaskLayer(nn.Module):
+    def __init__(self, in_channels, width, height):
+        super().__init__()
+        self.mask = nn.Parameter(torch.ones([in_channels, width, height]))
+    
+    def forward(self, x):
+        return x * self.mask.unsqueeze(0)
+
+
+def get_dct_weight(length, device="cpu"):
+    k = torch.arange(length, device=device)
+    n = k.unsqueeze(-1)
+    dct_weight = torch.cos(torch.pi * (0.5 + n) * k / length) / torch.sqrt(torch.tensor(length)).to(device)
+    dct_weight[:,1:] *= torch.sqrt(torch.tensor(2)).to(device)
+    return dct_weight
+
+
+class DCT2d(nn.Module):
     def __init__(self, width, height):
         super().__init__()
-        self.dct = DCT2DSpatialTransformLayer(width, height)
-        self.fc = SelectGroupFClayer(width*height)
-        self.idct = IDCT2DSpatialTransformLayer(width, height)
+        self.dct_matrix_x = nn.Parameter(get_dct_weight(width), requires_grad=False)
+        self.dct_matrix_y = nn.Parameter(get_dct_weight(height), requires_grad=False)
+    
+    def forward(self, x):
+        X = torch.matmul(x, self.dct_matrix_x)
+        X = torch.matmul(self.dct_matrix_y.transpose(-1, -2), X)
+        return X
+    
+
+class IDCT2d(nn.Module):
+    def __init__(self, width, height):
+        super().__init__()
+        self.dct_matrix_x = nn.Parameter(get_dct_weight(width), requires_grad=False)
+        self.dct_matrix_y = nn.Parameter(get_dct_weight(height), requires_grad=False)
+    
+    def forward(self, X):
+        X = torch.matmul(X, self.dct_matrix_x.transpose(-1, -2))
+        x = torch.matmul(self.dct_matrix_y, X)
+        return x
+
+
+class DCTDenoAttention(nn.Module):
+    def __init__(self, in_channels, width, height):
+        super().__init__()
+        self.in_channels = in_channels
+        self.width = width
+        self.height = height
+        self.dct = DCT2d(width, height)
+        # self.fc = SelectGroupFClayer(width*height)
+        # self.fc = SimpleFCLayer(width*height) # a simpler version of fc layer
+        self.fc = AdaFreqMaskLayer(in_channels, width, height) # an adaptive frequency mask
+        self.idct = IDCT2d(width, height)
+        self.drop_out = nn.Dropout2d()
+        self.norm = nn.LayerNorm([in_channels, height, width])
 
     def forward(self, x):
-        if x.shape[2] != self.dct.dct_y.weight.shape[0] or x.shape[3] != self.dct.dct_y.weight.shape[1]:
-            # interpolate if the size does not match
-            ori_size = x.shape[2:4]
-            x = F.interpolate(x, (self.dct.dct_y.weight.shape[0], self.dct.dct_y.weight.shape[1]))
-            x = self.dct(x)
-            x = self.fc(x)
-            x = self.idct(x)
-            x = F.interpolate(x, ori_size)
-            return x
-        x = self.dct(x)
-        x = self.fc(x)
-        x = self.idct(x)
+        ori_shape = None
+        if x.shape[-1] != self.height or x.shape[-2] != self.width:
+            ori_shape = x.shape
+            x = F.interpolate(x, [self.width, self.height])
+        X = self.dct(x)
+        Y = self.fc(X)
+        y = self.idct(Y)
+        x = x + self.drop_out(y)
+        x = self.norm(x)
+        if ori_shape:
+            x = F.interpolate(x, [ori_shape[-1], ori_shape[-2]])
         return x
+
+
+if __name__=="__main__":
+    # test DCT
+    import numpy as np
+    from scipy.fft import dctn, idctn
+
+    dct2d  = DCT2d(32, 16).cpu().eval()
+    idct2d = IDCT2d(32, 16).cpu().eval()
+
+    x_torch = torch.randn(1, 16, 32)
+    x_np     = x_torch.numpy()
+
+    X_scipy = dctn(x_np, type=2, norm='ortho')
+    X_torch = dct2d(x_torch).numpy()
+
+    print('DCT max abs diff:', np.max(np.abs(X_scipy - X_torch)))
+
+    x_rec_scipy = idctn(X_scipy, type=2, norm='ortho')
+    x_rec_torch = idct2d(torch.from_numpy(X_scipy)).numpy()
+
+    print('IDCT max abs diff:', np.max(np.abs(x_rec_scipy - x_rec_torch)))

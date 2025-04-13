@@ -8,6 +8,7 @@ class WTConv(nn.Module):
     def __init__(self, c1, c2, kernel_size=5, stride=1, bias=True, wt_levels=3):
         super().__init__()
         self.conv = WTConv2d(c1, c2, kernel_size=kernel_size, stride=stride, bias=bias, wt_levels=wt_levels)
+        
     def forward(self, x):
         return self.conv(x)
 
@@ -23,7 +24,7 @@ class WTConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=5, stride=1, bias=True, wt_levels=1, wt_type='db1'):
         super(WTConv2d, self).__init__()
 
-        assert in_channels == out_channels
+        assert in_channels == out_channels, f"expect input has channel num {out_channels}, but got {in_channels}"
 
         self.in_channels = in_channels
         self.wt_levels = wt_levels

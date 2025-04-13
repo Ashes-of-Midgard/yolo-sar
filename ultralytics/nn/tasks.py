@@ -106,7 +106,6 @@ BASE_MODULES = frozenset(
     {
         Classify,
         Conv,
-        WTConv,
         ConvTranspose,
         GhostConv,
         Bottleneck,
@@ -1245,11 +1244,15 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
+        elif m is WTConv:
+            c1 = c2 = ch[f]
+            args = [c1, c2, *args[1:]]
         elif m is LSKblock: # LSKblock expects no arguments than c1
             c1 = ch[f]
             args = [c1]
-        elif m is DCTDenoAttention: # DCTDenoAttention expects args [width, height]
-            c2 = ch[f]
+        elif m is DCTDenoAttention: # DCTDenoAttention expects args [in_channels, width, height]
+            c1 = c2 = ch[f]
+            args = [c1, *args]
         else:
             c2 = ch[f]
 
