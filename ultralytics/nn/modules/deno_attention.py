@@ -115,6 +115,21 @@ class AdaFreqMaskLayer(nn.Module):
         return x * self.mask.unsqueeze(0)
 
 
+class SqueezeFCLayer(nn.Module):
+    def __init__(self, channel, latent_channel):
+        super().__init__()
+        self.fc1 = nn.Conv1d(channel, latent_channel, 1)
+        self.fc2 = nn.Conv1d(latent_channel, channel, 1)
+    
+    def forward(self, x):
+        b,c,h,w = x.size()
+        x = x.permute(0,2,3,1).reshape(b,h*w,c)
+        x = self.fc1(x)
+        x = self.fc2(x)
+        x = x.reshape(b,h,w,c).permute(0,3,1,2)
+        return x
+
+
 def get_dct_weight(length, device="cpu"):
     k = torch.arange(length, device=device)
     n = k.unsqueeze(-1)
@@ -156,7 +171,8 @@ class DCTDenoAttention(nn.Module):
         self.dct = DCT2d(width, height)
         # self.fc = SelectGroupFClayer(width*height)
         # self.fc = SimpleFCLayer(width*height) # a simpler version of fc layer
-        self.fc = AdaFreqMaskLayer(in_channels, width, height) # an adaptive frequency mask
+        # self.fc = AdaFreqMaskLayer(in_channels, width, height) # an adaptive frequency mask
+        self.fc = SqueezeFCLayer(width*height, 32)
         self.idct = IDCT2d(width, height)
         self.drop_out = nn.Dropout2d()
         self.norm = nn.LayerNorm([in_channels, height, width])
@@ -169,8 +185,9 @@ class DCTDenoAttention(nn.Module):
         X = self.dct(x)
         Y = self.fc(X)
         y = self.idct(Y)
-        x = x + self.drop_out(y)
-        x = self.norm(x)
+        # x = x + self.drop_out(y)
+        # x = self.norm(x)
+        x = torch.concat([x, y], dim=1)
         if ori_shape:
             x = F.interpolate(x, [ori_shape[-1], ori_shape[-2]])
         return x
@@ -185,7 +202,7 @@ if __name__=="__main__":
     idct2d = IDCT2d(32, 16).cpu().eval()
 
     x_torch = torch.randn(1, 16, 32)
-    x_np     = x_torch.numpy()
+    x_np = x_torch.numpy()
 
     X_scipy = dctn(x_np, type=2, norm='ortho')
     X_torch = dct2d(x_torch).numpy()

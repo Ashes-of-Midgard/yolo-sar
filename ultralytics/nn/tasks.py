@@ -1251,7 +1251,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             c1 = ch[f]
             args = [c1]
         elif m is DCTDenoAttention: # DCTDenoAttention expects args [in_channels, width, height]
-            c1 = c2 = ch[f]
+            c1 = ch[f]
+            c2 = c1*2
             args = [c1, *args]
         else:
             c2 = ch[f]
