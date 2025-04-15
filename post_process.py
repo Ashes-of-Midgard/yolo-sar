@@ -2,342 +2,372 @@ import os
 import argparse
 import numpy as np
 from sklearn.cluster import DBSCAN
-from collections import defaultdict
-import cv2
+from sklearn.metrics import pairwise_distances
+from PIL import Image
 import torch
 import torch.nn.functional as F
-from tqdm import tqdm
+from collections import defaultdict
+import json
+from shapely.geometry import Polygon
 
-class Sample:
-    def __init__(self, image_path, label_path, image_size, boxes):
-        self.image_path = image_path
-        self.label_path = label_path
-        self.image_size = image_size  # (width, height)
-        self.boxes = boxes  # List of dicts: {'class_id', 'points', 'center'}
-        self.sorted_centers = []
-        self.sorted_boxes = []
-        self.vector_v = None
-        self.vector_u = None
+class DetectionPostProcessor:
+    def __init__(self, args):
+        self.args = args
+        self.image_files = []
+        self.label_files = []
+        self.image_shapes = {}
+        self.max_objects = 0
+        self.V = None
+        self.U = None
+        self.cluster_info = defaultdict(list)
+        self.abnormal_operations = {}
 
-def read_samples(images_root, labels_root):
-    samples = []
-    image_exts = ['.jpg', '.jpeg', '.png', '.bmp']
-    
-    for label_file in os.listdir(labels_root):
-        if not label_file.endswith('.txt'):
-            continue
+    def load_data(self):
+        # 建立图像-标签文件映射
+        file_pairs = []
+        for fname in os.listdir(self.args.labels_root):
+            if fname.endswith('.txt'):
+                label_path = os.path.join(self.args.labels_root, fname)
+                base = os.path.splitext(fname)[0]
+                img_found = False
+                for ext in ['.jpg', '.png', '.jpeg']:
+                    img_path = os.path.join(self.args.images_root, base + ext)
+                    if os.path.exists(img_path):
+                        file_pairs.append((img_path, label_path))
+                        img_found = True
+                        break
+                if not img_found:
+                    print(f"Warning: No image found for {label_path}")
+
+        # 第一次遍历获取最大目标数和图像尺寸
+        all_centers = []
+        all_boxes = []
+        for img_path, label_path in file_pairs:
+            # 获取图像尺寸
+            with Image.open(img_path) as img:
+                self.image_shapes[label_path] = img.size  # (width, height)
             
-        label_path = os.path.join(labels_root, label_file)
-        base_name = os.path.splitext(label_file)[0]
-        image_path = None
-        for ext in image_exts:
-            path = os.path.join(images_root, base_name + ext)
-            if os.path.exists(path):
-                image_path = path
-                break
-        if not image_path:
-            continue
+            # 读取标签文件
+            with open(label_path) as f:
+                lines = f.readlines()
             
-        # Read image size
-        img = cv2.imread(image_path)
-        if img is None:
-            continue
-        h, w = img.shape[:2]
-        
-        # Parse label file
-        boxes = []
-        with open(label_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) != 9:
+            objects = []
+            for line in lines:
+                parts = list(map(float, line.strip().split()))
+                if len(parts) != 10:
                     continue
-                class_id = int(parts[0])
-                points = list(map(float, parts[1:]))
-                # Calculate center
-                xs = points[::2]
-                ys = points[1::2]
-                center = (sum(xs)/4, sum(ys)/4)
-                boxes.append({
-                    'class_id': class_id,
-                    'points': points,
-                    'center': center
-                })
-        
-        # Sort boxes by center: top to bottom, left to right
-        boxes.sort(key=lambda b: (b['center'][1], b['center'][0]))
-        
-        sample = Sample(image_path, label_path, (w, h), boxes)
-        samples.append(sample)
-    
-    return samples
-
-def build_feature_vectors(samples):
-    max_n = max(len(s.boxes) for s in samples)
-    
-    for s in samples:
-        # Build vectors for centers and boxes
-        centers = []
-        boxes = []
-        for b in s.boxes:
-            centers.extend(b['center'])
-            boxes.extend(b['points'])
-        
-        # Pad with zeros
-        pad_centers = [0] * (2 * max_n - len(centers))
-        pad_boxes = [0] * (8 * max_n - len(boxes))
-        
-        s.vector_v = np.array(centers + pad_centers)
-        s.vector_u = np.array(boxes + pad_boxes)
-    
-    V = np.stack([s.vector_v for s in samples])
-    U = np.stack([s.vector_u for s in samples])
-    return V, U, max_n
-
-def cluster_samples(V, eps=0.5, min_samples=5):
-    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(V)
-    return clustering.labels_
-
-def find_cluster_representatives(samples, labels, V):
-    normal_clusters = [l for l in labels if l != -1]
-    unique_clusters = set(normal_clusters)
-    
-    representatives = []
-    for cluster_id in unique_clusters:
-        cluster_indices = np.where(labels == cluster_id)[0]
-        cluster_points = V[cluster_indices]
-        cluster_center = cluster_points.mean(axis=0)
-        
-        # Find closest sample to cluster center
-        distances = np.linalg.norm(cluster_points - cluster_center, axis=1)
-        rep_idx = cluster_indices[np.argmin(distances)]
-        representatives.append(samples[rep_idx])
-    
-    return representatives
-
-def match_boxes(a_centers, n_centers, t_d):
-    a_points = [(a_centers[2*i], a_centers[2*i+1]) for i in range(len(a_centers)//2)]
-    n_points = [(n_centers[2*i], n_centers[2*i+1]) for i in range(len(n_centers)//2)]
-    
-    matches = 0
-    used_n = set()
-    for i, anomaly_p in enumerate(a_points):
-        if anomaly_p == (0, 0):
-            continue
-        min_dist = float('inf')
-        min_j = -1
-        for j, normal_p in enumerate(n_points):
-            if normal_p == (0, 0) or j in used_n:
-                continue
-            dist = np.sqrt((anomaly_p[0]-normal_p[0])**2 + (anomaly_p[1]-normal_p[1])**2)
-            if dist < t_d and dist < min_dist:
-                min_dist = dist
-                min_j = j
-        if min_j != -1:
-            matches += 1
-            used_n.add(min_j)
-    return matches
-
-def process_anomalies(anomalies, representatives, t_d, max_n, suppress_fp=False):
-    for a_sample in tqdm(anomalies, desc="Processing anomalies"):
-        best_match = None
-        best_score = -1
-        
-        # Find best matching representative
-        for rep in representatives:
-            score = match_boxes(a_sample.vector_v, rep.vector_v, t_d)
-            if score > best_score:
-                best_score = score
-                best_match = rep
-        
-        if not best_match:
-            continue
-            
-        # Match individual boxes
-        a_centers = a_sample.vector_v.tolist()
-        n_centers = best_match.vector_v.tolist()
-        
-        # Find matched boxes
-        matched_a = set()
-        matched_n = set()
-        for i in range(max_n):
-            a_center = (a_centers[2*i], a_centers[2*i+1])
-            if a_center == (0, 0):
-                continue
-            min_dist = float('inf')
-            min_j = -1
-            for j in range(max_n):
-                n_center = (n_centers[2*j], n_centers[2*j+1])
-                if n_center == (0, 0) or j in matched_n:
-                    continue
-                dist = np.sqrt((a_center[0]-n_center[0])**2 + (a_center[1]-n_center[1])**2)
-                if dist < t_d and dist < min_dist:
-                    min_dist = dist
-                    min_j = j
-            if min_j != -1:
-                matched_a.add(i)
-                matched_n.add(min_j)
-        
-        # Suppress false positives
-        if suppress_fp:
-            new_boxes = []
-            for i, box in enumerate(a_sample.boxes):
-                if i in matched_a:
-                    new_boxes.append(box)
-            a_sample.boxes = new_boxes
-        
-        # Complete missing boxes
-        for j in range(max_n):
-            if (n_centers[2*j], n_centers[2*j+1]) == (0, 0):
-                continue
-            if j not in matched_n:
-                # Find corresponding box in representative
-                rep_box = best_match.boxes[j]
+                cls_id = int(parts[0])
+                points = np.array(parts[1:9]).reshape(4, 2)
+                conf = parts[9]
                 
-                # Generate new box
-                new_box = complete_box(a_sample, rep_box, best_match)
-                if new_box:
-                    a_sample.boxes.append(new_box)
+                # 计算中心点
+                center = points.mean(axis=0)
+                objects.append((center, points.ravel(), conf))
+            
+            # 排序：从上到下，从左到右
+            objects.sort(key=lambda x: (x[0][1], x[0][0]))
+            all_centers.append([c for c, _, _ in objects])
+            all_boxes.append([b for _, b, _ in objects])
+            self.max_objects = max(self.max_objects, len(objects))
+
+        # 构建V和U矩阵
+        self.V = np.zeros((len(file_pairs), 2 * self.max_objects))
+        self.U = np.zeros((len(file_pairs), 8 * self.max_objects))
+        for i, (centers, boxes) in enumerate(zip(all_centers, all_boxes)):
+            flat_centers = np.array(centers).flatten()
+            flat_boxes = np.array(boxes).flatten()
+            self.V[i, :len(flat_centers)] = flat_centers
+            self.U[i, :len(flat_boxes)] = flat_boxes
+
+        self.image_files = [p[0] for p in file_pairs]
+        self.label_files = [p[1] for p in file_pairs]
+
+    def cluster_samples(self):
+        # DBSCAN聚类
+        clustering = DBSCAN(eps=self.args.eps, min_samples=self.args.min_samples).fit(self.V)
+        labels = clustering.labels_
         
-        # Re-sort boxes after modifications
-        a_sample.boxes.sort(key=lambda b: (b['center'][1], b['center'][0]))
+        # 记录聚类信息
+        clusters = defaultdict(list)
+        for idx, lbl in enumerate(labels):
+            if lbl == -1:
+                self.cluster_info['abnormal'].append(idx)
+            else:
+                clusters[lbl].append(idx)
+        
+        # 寻找每个聚类的代表样本
+        self.cluster_centers = {}
+        for cid, members in clusters.items():
+            cluster_data = self.V[members]
+            center = cluster_data.mean(axis=0)
+            distances = np.linalg.norm(cluster_data - center, axis=1)
+            rep_idx = members[np.argmin(distances)]
+            self.cluster_centers[cid] = rep_idx
+            self.cluster_info[cid] = members
 
-def complete_box(a_sample, rep_box, rep_sample):
-    # Get region X in anomaly image
-    w_a, h_a = a_sample.image_size
-    cx, cy = rep_box['center']
-    
-    # Convert normalized coordinates to pixel coordinates
-    x_center = cx * w_a
-    y_center = cy * h_a
-    region_width = w_a / 8
-    region_height = h_a / 8
-    
-    x0 = max(0, int(x_center - region_width/2))
-    y0 = max(0, int(y_center - region_height/2))
-    x1 = min(w_a, int(x_center + region_width/2))
-    y1 = min(h_a, int(y_center + region_height/2))
-    
-    if x0 >= x1 or y0 >= y1:
-        return None
-    
-    # Read anomaly image
-    img_a = cv2.imread(a_sample.image_path)
-    if img_a is None:
-        return None
-    region_X = img_a[y0:y1, x0:x1]
-    X_tensor = torch.from_numpy(region_X).permute(2,0,1).unsqueeze(0).float()
-    
-    # Get kernel K from representative image
-    w_rep, h_rep = rep_sample.image_size
-    points = np.array(rep_box['points']).reshape(4, 2)
-    points[:, 0] *= w_rep
-    points[:, 1] *= h_rep
-    points = points.astype(int)
-    
-    x_min = max(0, points[:, 0].min())
-    y_min = max(0, points[:, 1].min())
-    x_max = min(w_rep, points[:, 0].max())
-    y_max = min(h_rep, points[:, 1].max())
-    
-    img_rep = cv2.imread(rep_sample.image_path)
-    if img_rep is None:
-        return None
-    region_K = img_rep[y_min:y_max, x_min:x_max]
-    if region_K.size == 0:
-        return None
-    
-    # Resize kernel to match X region size
-    try:
-        region_K = cv2.resize(region_K, (x1-x0, y1-y0))
-    except:
-        return None
-    K_tensor = torch.from_numpy(region_K).permute(2,0,1).unsqueeze(0).float()
-    
-    # Normalize tensors
-    X_tensor = X_tensor / 255.0
-    K_tensor = K_tensor / 255.0
-    
-    # Perform convolution
-    with torch.no_grad():
-        conv_map = F.conv2d(X_tensor, K_tensor, padding=(K_tensor.shape[2]//2, K_tensor.shape[3]//2))
-    
-    # Find max response
-    max_val, max_idx = torch.max(conv_map.view(-1), dim=0)
-    max_y = max_idx // conv_map.shape[3]
-    max_x = max_idx % conv_map.shape[3]
-    
-    # Convert to image coordinates
-    new_cx = x0 + max_x.item()
-    new_cy = y0 + max_y.item()
-    
-    # Convert to normalized coordinates
-    new_cx_norm = new_cx / w_a
-    new_cy_norm = new_cy / h_a
-    
-    # Create new box using relative positions
-    dxs = [rep_box['points'][i] - rep_box['center'][0] if i%2==0 else 
-           rep_box['points'][i] - rep_box['center'][1] for i in range(8)]
-    
-    new_points = []
-    for i in range(8):
-        if i % 2 == 0:
-            new_points.append(new_cx_norm + dxs[i])
-        else:
-            new_points.append(new_cy_norm + dxs[i])
-    
-    return {
-        'class_id': rep_box['class_id'],
-        'points': new_points,
-        'center': (new_cx_norm, new_cy_norm)
-    }
+        return labels
 
-def save_results(samples, output_dir):
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    for sample in samples:
-        output_path = os.path.join(output_dir, os.path.basename(sample.label_path))
-        with open(output_path, 'w') as f:
-            for box in sample.boxes:
-                line = [str(box['class_id'])] + [f"{x:.6f}" for x in box['points']]
-                f.write(" ".join(line) + "\n")
+    def match_abnormal_samples(self):
+        normal_reps = list(self.cluster_centers.values())
+        # v_normal = self.V[normal_reps]
+        matches = {}
+        
+        for a_idx in self.cluster_info['abnormal']:
+            v_abnormal = self.V[a_idx]
+            
+            # 计算匹配分数
+            scores = []
+            for rep_idx in normal_reps:
+                n_centers = self.V[rep_idx].reshape(-1, 2)
+                a_centers = v_abnormal.reshape(-1, 2)
+                
+                # 过滤零填充部分
+                valid_n = np.where(np.any(n_centers != 0, axis=1))[0]
+                valid_a = np.where(np.any(a_centers != 0, axis=1))[0]
+                
+                # 计算距离矩阵
+                dist_matrix = pairwise_distances(
+                    a_centers[valid_a], 
+                    n_centers[valid_n], 
+                    metric='euclidean'
+                )
+                
+                # 贪心匹配
+                matched = set()
+                match_count = 0
+                for a_order in np.argsort(dist_matrix, axis=None):
+                    a_idx_local = a_order // dist_matrix.shape[1]
+                    n_idx_local = a_order % dist_matrix.shape[1]
+                    if dist_matrix[a_idx_local, n_idx_local] > self.args.t_d:
+                        break
+                    a_real = valid_a[a_idx_local]
+                    n_real = valid_n[n_idx_local]
+                    if a_real not in matched and n_real not in matched:
+                        matched.add(a_real)
+                        matched.add(n_real)
+                        match_count += 1
+                scores.append(match_count)
+            
+            best_match = normal_reps[np.argmax(scores)]
+            matches[a_idx] = best_match
+            self.abnormal_operations[a_idx] = {'match': best_match, 'add': [], 'remove': []}
+        
+        return matches
 
-def main(args):
-    # Step 1: Read samples
-    samples = read_samples(args.images_root, args.labels_root)
-    if not samples:
-        print("No valid samples found")
-        return
-    
-    # Step 2: Build feature vectors
-    V, U, max_n = build_feature_vectors(samples)
-    
-    # Step 3: Cluster
-    labels = cluster_samples(V, eps=args.eps, min_samples=args.min_samples)
-    
-    # Split normal and anomalies
-    normal_samples = [s for s, l in zip(samples, labels) if l != -1]
-    anomalies = [s for s, l in zip(samples, labels) if l == -1]
-    
-    # Step 4: Find representatives
-    representatives = find_cluster_representatives(samples, labels, V)
-    
-    # Step 5-6: Process anomalies
-    process_anomalies(anomalies, representatives, args.t_d, max_n, args.suppress_fp)
-    
-    # Step 7: Save results
-    save_results(samples, args.processed_labels_root)
+    def process_abnormal(self, matches):
+        processed = {}
+        for a_idx, n_rep in matches.items():
+            label_path = self.label_files[a_idx]
+            img_path = self.image_files[a_idx]
+            img_w, img_h = self.image_shapes[label_path]
+            
+            # 原始检测结果
+            with open(label_path) as f:
+                orig_objs = [list(map(float, line.strip().split())) for line in f]
+            
+            # 获取正常代表的检测框
+            n_centers = self.V[n_rep].reshape(-1, 2)
+            n_boxes = self.U[n_rep].reshape(-1, 8)
+            
+            # 获取异常样本的检测框
+            a_centers = self.V[a_idx].reshape(-1, 2)
+            a_boxes = self.U[a_idx].reshape(-1, 8)
+            
+            # 匹配检测框
+            valid_n = np.where(np.any(n_centers != 0, axis=1))[0]
+            valid_a = np.where(np.any(a_centers != 0, axis=1))[0]
+            dist_matrix = pairwise_distances(a_centers[valid_a], n_centers[valid_n])
+            
+            matched_a = set()
+            matched_n = set()
+            for a_order in np.argsort(dist_matrix, axis=None):
+                a_idx_local = a_order // dist_matrix.shape[1]
+                n_idx_local = a_order % dist_matrix.shape[1]
+                if dist_matrix[a_idx_local, n_idx_local] > self.args.t_d:
+                    break
+                a_real = valid_a[a_idx_local]
+                n_real = valid_n[n_idx_local]
+                if a_real not in matched_a and n_real not in matched_n:
+                    matched_a.add(a_real)
+                    matched_n.add(n_real)
+            
+            # 补充漏检
+            missing_n = [i for i in valid_n if i not in matched_n]
+            new_objs = [obj for obj in orig_objs]
+            
+            for nq in missing_n:
+                # 生成新检测框
+                n_center = n_centers[nq]
+                n_box = n_boxes[nq]
+                
+                # 裁剪区域
+                crop_w = img_w // 8
+                crop_h = img_h // 8
+                x_center = int(n_center[0] * img_w)
+                y_center = int(n_center[1] * img_h)
+                x1 = max(0, x_center - crop_w//2)
+                y1 = max(0, y_center - crop_h//2)
+                x2 = min(img_w, x_center + crop_w//2)
+                y2 = min(img_h, y_center + crop_h//2)
+                
+                # 获取模板
+                n_img_path = self.image_files[n_rep]
+                with Image.open(n_img_path) as n_img:
+                    n_box_pixels = (n_box.reshape(4, 2) * [n_img.width, n_img.height]).astype(int)
+                    min_x = np.min(n_box_pixels[:, 0])
+                    max_x = np.max(n_box_pixels[:, 0])
+                    min_y = np.min(n_box_pixels[:, 1])
+                    max_y = np.max(n_box_pixels[:, 1])
+                    kernel = n_img.crop((min_x, min_y, max_x, max_y)).convert('L')
+                    kernel_tensor = torch.tensor(np.array(kernel)/255.0).float()
+                
+                # 处理目标图像
+                with Image.open(img_path) as a_img:
+                    region = a_img.crop((x1, y1, x2, y2)).convert('L')
+                    region_tensor = torch.tensor(np.array(region)/255.0).float()
+                
+                # 卷积匹配
+                kernel_tensor = kernel_tensor.unsqueeze(0).unsqueeze(0)
+                region_tensor = region_tensor.unsqueeze(0).unsqueeze(0)
+                similarity = F.conv2d(
+                    F.normalize(region_tensor - region_tensor.mean()),
+                    F.normalize(kernel_tensor - kernel_tensor.mean()),
+                    padding='same'
+                )
+                
+                # 找到最大响应位置
+                max_val, max_idx = torch.max(similarity.view(-1), 0)
+                max_y, max_x = np.unravel_index(max_idx, similarity.shape[2:])
+                
+                # 生成新框
+                new_center_x = (x1 + max_x * (x2 - x1)/region.width) / img_w
+                new_center_y = (y1 + max_y * (y2 - y1)/region.height) / img_h
+                new_box = n_box.reshape(4, 2) - n_center + [new_center_x, new_center_y]
+                
+                # 记录操作
+                self.abnormal_operations[a_idx]['add'].append(
+                    (new_center_x, new_center_y))
+                new_objs.append([
+                    int(n_box[0]),
+                    *new_box.ravel().tolist(),
+                    min(self.args.base_conf + max_val.item(), 1.0)
+                ])
+            
+            # 抑制虚警
+            if self.args.suppress:
+                new_objs = [obj for idx, obj in enumerate(new_objs) 
+                           if idx < len(orig_objs) and idx in matched_a]
+                removed = [idx for idx in range(len(orig_objs)) 
+                          if idx not in matched_a]
+                self.abnormal_operations[a_idx]['remove'].extend(removed)
+            
+            processed[label_path] = new_objs
+        
+        return processed
 
-if __name__ == "__main__":
+    def save_results(self, processed, normal_indices):
+        # 创建输出目录
+        os.makedirs(self.args.processed_labels_root, exist_ok=True)
+        
+        # 保存处理后的标签
+        for label_path, objs in processed.items():
+            base = os.path.basename(label_path)
+            out_path = os.path.join(self.args.processed_labels_root, base)
+            with open(out_path, 'w') as f:
+                for obj in objs:
+                    line = ' '.join(map(str, obj))
+                    f.write(line + '\n')
+        
+        # 保存正常样本
+        for idx in normal_indices:
+            label_path = self.label_files[idx]
+            base = os.path.basename(label_path)
+            out_path = os.path.join(self.args.processed_labels_root, base)
+            with open(label_path) as f_in, open(out_path, 'w') as f_out:
+                f_out.write(f_in.read())
+        
+        # 保存聚类信息
+        # 修改cluster_report的构建部分
+        cluster_report = {
+            'parameters': {
+                'eps': float(self.args.eps),
+                'min_samples': int(self.args.min_samples),
+                't_d': float(self.args.t_d),
+                'base_conf': float(self.args.base_conf),
+                'suppress': bool(self.args.suppress)
+            },
+            'clusters': {},
+            'abnormal': []
+        }
+        
+        for cid, members in self.cluster_info.items():
+            if cid == 'abnormal':
+                continue
+            # 转换cluster_id为int
+            cluster_id = int(cid) if isinstance(cid, np.integer) else cid
+            cluster_report['clusters'][f'cluster_{cluster_id}'] = [
+                os.path.basename(self.label_files[int(i)]) for i in members  # 转换索引为int
+            ]
+            # 对文件名进行排序
+            cluster_report['clusters'][f'cluster_{cluster_id}'] = sorted(cluster_report['clusters'][f'cluster_{cluster_id}'])
+        
+        for a_idx in self.cluster_info['abnormal']:
+            label_name = os.path.basename(self.label_files[int(a_idx)])  # 转换索引为int
+            match_idx = int(self.abnormal_operations[a_idx]['match'])  # 转换匹配索引为int
+            cluster_id = [k for k, v in self.cluster_centers.items() if v == match_idx][0]
+            cluster_id = int(cluster_id) if isinstance(cluster_id, np.integer) else cluster_id
+            
+            operations = []
+            for add in self.abnormal_operations[a_idx]['add']:
+                # 转换numpy float为Python float
+                operations.append(f"add box at ({float(add[0]):.4f}, {float(add[1]):.4f})")
+            for remove in self.abnormal_operations[a_idx]['remove']:
+                obj = processed[self.label_files[a_idx]][remove]
+                center = np.array(obj[1:9]).reshape(4,2).mean(axis=0)
+                # 转换numpy float为Python float
+                operations.append(f"remove box at ({float(center[0]):.4f}, {float(center[1]):.4f})")
+            
+            cluster_report['abnormal'].append({
+                'label': label_name,
+                'match_cluster': int(cluster_id),  # 确保cluster_id是int
+                'operations': operations
+            })
+        
+        with open(os.path.join(self.args.processed_labels_root, 'cluster_report.json'), 'w') as f:
+            json.dump(cluster_report, f, indent=2)
+
+def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--images_root', type=str, required=True, help='Path to images directory')
-    parser.add_argument('--labels_root', type=str, required=True, help='Path to labels directory')
-    parser.add_argument('--processed_labels_root', type=str, required=True, help='Output directory for processed labels')
-    parser.add_argument('--eps', type=float, default=0.5, help='DBSCAN epsilon parameter')
-    parser.add_argument('--min_samples', type=int, default=5, help='DBSCAN min samples parameter')
-    parser.add_argument('--t_d', type=float, default=0.1, help='Matching distance threshold')
-    parser.add_argument('--suppress_fp', action='store_true', help='Enable false positive suppression')
+    parser.add_argument('--images_root', required=True)
+    parser.add_argument('--labels_root', required=True)
+    parser.add_argument('--processed_labels_root', required=True)
+    parser.add_argument('--eps', type=float, default=0.5)
+    parser.add_argument('--min_samples', type=int, default=5)
+    parser.add_argument('--t_d', type=float, default=0.1)
+    parser.add_argument('--base_conf', type=float, default=0.5)
+    parser.add_argument('--suppress', action='store_true')
+    return parser.parse_args()
+
+def main():
+    args = parse_args()
+    processor = DetectionPostProcessor(args)
     
-    args = parser.parse_args()
+    # 步骤1：加载数据
+    processor.load_data()
     
-    main(args)
+    # 步骤2：聚类
+    processor.cluster_samples()
+    
+    # 步骤3/4：匹配异常样本
+    matches = processor.match_abnormal_samples()
+    
+    # 步骤5/6：处理异常样本
+    processed = processor.process_abnormal(matches)
+    
+    # 步骤7/8：保存结果
+    normal_indices = [i for i in range(len(processor.label_files)) 
+                     if i not in processor.cluster_info['abnormal']]
+    processor.save_results(processed, normal_indices)
+
+if __name__ == '__main__':
+    main()
