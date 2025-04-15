@@ -12,7 +12,7 @@ if __name__=="__main__":
     # model = YOLO("yolo12m-obb-deno-2.yaml", task="obb")
     # model = YOLO("yolo12m-obb-deno-3.yaml", task="obb")
     # model = YOLO("yolo12m-obb-sc.yaml", task="obb")
-    model = YOLO("/root/yolo-sar/runs/obb/train/weights/best.pt", task="obb")
+    model = YOLO("/root/yolo-sar/runs/obb/train3/weights/best.pt", task="obb")
     
     # 加载预训练模型（可选）
     # !!!不要在初始化时直接读取预训练模型!!!
@@ -22,7 +22,7 @@ if __name__=="__main__":
     # model.load_state_dict(convert_state_dict_obb_wtconv(model_pretrained.state_dict()), strict=False)
 
     # 用自定义的SAR数据集训练/微调
-    results = model.train(data="/root/yolo-sar/datasets/All-data/dataset.yaml", epochs=300, amp=True, batch=16, device=[0,1,2,3]) # 不建议开启混合精度，非常容易出现数据溢出
+    results = model.train(data="/root/yolo-sar/datasets/SRSDD-competition-aug-2/dataset.yaml", epochs=100, amp=True, batch=16, device=[0,1,2,3]) # 不建议开启混合精度，非常容易出现数据溢出
 
     # 评测模型的效果
-    results = model.val(data="/root/yolo-sar/datasets/All-data/dataset.yaml")
+    results = model.val(data="/root/yolo-sar/datasets/SRSDD-competition/dataset.yaml")
