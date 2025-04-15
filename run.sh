@@ -1,9 +1,9 @@
-IMAGES_ROOT="/root/yolo-sar/datasets/competition-2/images"
-LABELS_ROOT="/root/yolo-sar/datasets/competition-2/labels"
-PREDS_ROOT="/root/yolo-sar/datasets/competition-2/preds"
-PROCESSED_PREDS_ROOT="/root/yolo-sar/datasets/competition-2/processed_preds"
+IMAGES_ROOT="/workspace/data/images"
+LABELS_ROOT="/workspace/data/labels"
+PREDS_ROOT="/workspace/data/preds"
+PROCESSED_PREDS_ROOT="/workspace/data/processed_preds"
 
-MODEL="/root/yolo-sar/runs/obb/train3/weights/best.pt"
+MODEL="/workspace/models/yolo12x-SRSDD-competition-wtconv.pt"
 
 python pred_obb.py --model $MODEL --images_root $IMAGES_ROOT --labels_root $PREDS_ROOT
 python cal_map.py --images_root $IMAGES_ROOT --labels_root $LABELS_ROOT --preds_root $PREDS_ROOT
