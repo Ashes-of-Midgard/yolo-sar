@@ -116,7 +116,7 @@ class DetectionValidator(BaseValidator):
         self.end2end = getattr(model, "end2end", False)
         self.metrics.names = self.names
         self.metrics.plot = self.args.plots
-        self.confusion_matrix = ConfusionMatrix(nc=self.nc, conf=self.args.conf)
+        self.confusion_matrix = ConfusionMatrix(nc=self.nc, conf=self.args.conf, iou_thres=0.95)
         self.seen = 0
         self.jdict = []
         self.stats = dict(tp=[], conf=[], pred_cls=[], target_cls=[], target_img=[])
@@ -195,6 +195,7 @@ class DetectionValidator(BaseValidator):
             preds (List[torch.Tensor]): List of predictions from the model.
             batch (dict): Batch data containing ground truth.
         """
+        plot_poor_flag = False
         for si, pred in enumerate(preds):
             self.seen += 1
             npr = len(pred)
@@ -231,6 +232,19 @@ class DetectionValidator(BaseValidator):
             for k in self.stats.keys():
                 self.stats[k].append(stat[k])
 
+            # output poor detection results
+            if self.args.save_poor:
+                matrix = self.confusion_matrix.matrix
+                for i in range(len(matrix) - 1):
+                    tp = matrix[i, i]
+                    fp = matrix[i, :].sum() - tp
+                    fn = matrix[:, i].sum() - tp
+                    # total = matrix.sum()
+                    # tn = total - (tp + fp + fn)
+                    # print(f"Class {i}: TP={tp}, FP={fp}, FN={fn}, TN={tn}")
+                    if fn > 0 or fp > 0:
+                        plot_poor_flag = True
+
             # Save
             if self.args.save_json:
                 self.pred_to_json(predn, batch["im_file"][si])
@@ -241,6 +255,7 @@ class DetectionValidator(BaseValidator):
                     pbatch["ori_shape"],
                     self.save_dir / "labels" / f"{Path(batch['im_file'][si]).stem}.txt",
                 )
+        return plot_poor_flag
 
     def finalize_metrics(self, *args, **kwargs):
         """

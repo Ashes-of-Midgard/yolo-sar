@@ -226,8 +226,15 @@ class BaseValidator:
                 # if there are prediction results in txt files
                 preds = self.get_pred_from_txts(pred_txts, batch)
 
-            self.update_metrics(preds, batch)
-            if self.args.plots and batch_i < self.plot_num:
+            try:
+                plot_poor_flag = self.update_metrics(preds, batch)
+            except:
+                self.update_metrics(preds, batch)
+                plot_poor_flag = False
+            if self.args.plots and batch_i < self.plot_num and not self.args.save_poor:
+                self.plot_val_samples(batch, batch_i)
+                self.plot_predictions(batch, preds, batch_i)
+            elif self.args.plots and plot_poor_flag:
                 self.plot_val_samples(batch, batch_i)
                 self.plot_predictions(batch, preds, batch_i)
 

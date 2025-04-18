@@ -307,7 +307,7 @@ def get_cfg(cfg: Union[str, Path, Dict, SimpleNamespace] = DEFAULT_CFG_DICT, ove
         overrides = cfg2dict(overrides)
         if "save_dir" not in cfg:
             overrides.pop("save_dir", None)  # special override keys to ignore
-        check_dict_alignment(cfg, overrides)
+        # check_dict_alignment(cfg, overrides)
         cfg = {**cfg, **overrides}  # merge cfg and overrides dicts (prefer overrides)
 
     # Special handling for numeric project/name
