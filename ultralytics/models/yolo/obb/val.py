@@ -1,6 +1,7 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
 from pathlib import Path
+import os
 
 import torch
 
@@ -8,6 +9,7 @@ from ultralytics.models.yolo.detect import DetectionValidator
 from ultralytics.utils import LOGGER, ops
 from ultralytics.utils.metrics import OBBMetrics, batch_probiou
 from ultralytics.utils.plotting import output_to_rotated_target, plot_images
+from ultralytics.utils.ops import xyxyxyxy2xywhr, clip_boxes
 
 
 class OBBValidator(DetectionValidator):
@@ -200,3 +202,35 @@ class OBBValidator(DetectionValidator):
                         f.writelines(f"{image_id} {score} {p[0]} {p[1]} {p[2]} {p[3]} {p[4]} {p[5]} {p[6]} {p[7]}\n")
 
         return stats
+
+    def get_pred_from_txts(self, pred_txts, batch):
+        preds = []
+        for i, im_file in enumerate(batch["im_file"]):
+            pbatch = self._prepare_batch(i, batch)
+            h, w = pbatch["ori_shape"]
+            pred_file = im_file.split("/")[-1].split(".")[0] + ".txt"
+            with open(os.path.join(pred_txts, pred_file)) as f:
+                lines = f.readlines()
+                pred = []
+                for _line in lines:
+                    class_id, x1, y1, x2, y2, x3, y3, x4, y4, conf = _line.split(" ")[:10]
+                    class_id = int(class_id)
+                    coords = torch.tensor([w*float(x1), h*float(y1), w*float(x2), h*float(y2), w*float(x3), h*float(y3), w*float(x4), h*float(y4)])
+                    coords = xyxyxyxy2xywhr(coords.unsqueeze(0))[0]
+                    # coords[:4:2] *= w_res
+                    # coords[1:4:2] *= h_res
+                    conf = float(conf)
+                    pred.append([*coords[:4], conf, class_id, coords[4]])
+                pred = torch.tensor(pred, device=batch["img"].device)
+                # ops.scale_boxes(
+                #     pbatch["ori_shape"], pred[:, :4], pbatch["imgsz"], xywh=True
+                # )
+                ratio_pad = pbatch["ratio_pad"]
+                gain = ratio_pad[0][0]
+                pad = ratio_pad[1]
+                pred[:,0] += pad[0]
+                pred[:,1] += pad[1]
+                pred[:,:4] *= gain
+                pred[:,:4] = clip_boxes(pred[:,:4], pbatch["imgsz"])
+            preds.append(pred)
+        return preds

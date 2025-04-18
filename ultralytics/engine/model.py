@@ -596,6 +596,7 @@ class Model(torch.nn.Module):
     def val(
         self,
         validator=None,
+        pred_txts=None,
         **kwargs: Any,
     ):
         """
@@ -625,7 +626,7 @@ class Model(torch.nn.Module):
         args = {**self.overrides, **custom, **kwargs, "mode": "val"}  # highest priority args on the right
 
         validator = (validator or self._smart_load("validator"))(args=args, _callbacks=self.callbacks)
-        validator(model=self.model)
+        validator(model=self.model,pred_txts=pred_txts)
         self.metrics = validator.metrics
         return validator.metrics
 

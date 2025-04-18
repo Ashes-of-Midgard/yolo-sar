@@ -130,7 +130,7 @@ class BaseValidator:
         self.plot_num = self.args.plot_num
 
     @smart_inference_mode()
-    def __call__(self, trainer=None, model=None):
+    def __call__(self, trainer=None, model=None, pred_txts=None):
         """
         Execute validation process, running inference on dataloader and computing performance metrics.
 
@@ -209,19 +209,22 @@ class BaseValidator:
             # Preprocess
             with dt[0]:
                 batch = self.preprocess(batch)
+            
+            if pred_txts is None:
+                # Inference
+                with dt[1]:
+                    preds = model(batch["img"], augment=augment)
+                # Loss
+                with dt[2]:
+                    if self.training:
+                        self.loss += model.loss(batch, preds)[1]
 
-            # Inference
-            with dt[1]:
-                preds = model(batch["img"], augment=augment)
-
-            # Loss
-            with dt[2]:
-                if self.training:
-                    self.loss += model.loss(batch, preds)[1]
-
-            # Postprocess
-            with dt[3]:
-                preds = self.postprocess(preds)
+                # Postprocess
+                with dt[3]:
+                    preds = self.postprocess(preds)
+            else:
+                # if there are prediction results in txt files
+                preds = self.get_pred_from_txts(pred_txts, batch)
 
             self.update_metrics(preds, batch)
             if self.args.plots and batch_i < self.plot_num:
@@ -375,4 +378,7 @@ class BaseValidator:
 
     def eval_json(self, stats):
         """Evaluate and return JSON format of prediction statistics."""
+        pass
+
+    def get_pred_from_txts(self, pred_txts, batch):
         pass

@@ -1,12 +1,15 @@
-IMAGES_ROOT="/workspace/data/images"
-LABELS_ROOT="/workspace/data/labels"
-PREDS_ROOT="/workspace/data/preds"
-PROCESSED_PREDS_ROOT="/workspace/data/processed_preds"
+DATASET="/hy-tmp/data/competition-2/dataset.yaml"
+IMAGES_ROOT="/hy-tmp/data/competition-2/val/images"
+PREDS_ROOT="/root/output/preds"
+PROCESSED_PREDS_ROOT="/root/output/processed_preds"
 
-MODEL="/workspace/models/yolo12x-SRSDD-competition-wtconv.pt"
+MODEL="/root/models/yolo12x-wtconv-SRSDD-competition-aug-add-epochs300.pt"
 
-python pred_obb.py --model $MODEL --images_root $IMAGES_ROOT --labels_root $PREDS_ROOT
-python cal_map.py --images_root $IMAGES_ROOT --labels_root $LABELS_ROOT --preds_root $PREDS_ROOT
+# if [ -d $PREDS_ROOT ]; then
+    # rm -r $PREDS_ROOT
+# fi
+# python pred_obb.py --model $MODEL --images_root $IMAGES_ROOT --labels_root $PREDS_ROOT
+python cal_map.py --dataset $DATASET --preds_root $PREDS_ROOT
 # echo "Start post process"
 # for eps in $(seq 0.01 0.01 0.1); do
 #     for min_samples in $(seq 1 1 10); do
@@ -21,5 +24,8 @@ python cal_map.py --images_root $IMAGES_ROOT --labels_root $LABELS_ROOT --preds_
 #     done
 # done
 # echo "end process"
-python post_process.py --images_root $IMAGES_ROOT --labels_root $PREDS_ROOT --processed_root $PROCESSED_PREDS_ROOT --vis
-python cal_map.py --images_root $IMAGES_ROOT --labels_root $LABELS_ROOT --preds_root $PREDS_ROOT
+# if [ -d $PROCESSED_PREDS_ROOT ]; then
+    # rm -r $PROCESSED_PREDS_ROOT
+# fi
+# python post_process.py --images_root $IMAGES_ROOT --labels_root $PREDS_ROOT --processed_root $PROCESSED_PREDS_ROOT --vis
+# python cal_map.py --dataset $DATASET --preds_root $PROCESSED_PREDS_ROOT
